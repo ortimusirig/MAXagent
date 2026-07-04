@@ -282,7 +282,8 @@ class MaxAgent:
             "recommendation_diverges": recommendation_diverges,
             "do_not_optimize": rec["do_not_optimize"],
         })
-        result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance, actor=actor))
+        result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance, actor=actor,
+                                        rec_reco=rec_reco, rec_gate_env=rec_gate_env))
         self._run_extras(asset, context, scope, criticality, trace, result)
         result["tool_trace"] = trace
         result["chat_summary"] = self._summary(result)
@@ -331,33 +332,51 @@ class MaxAgent:
             trace.append(_trace_entry(tm_env, ["decision", "reason"]))
             result["trial"] = tm_env["data"]
 
-    def _finish_gate(self, gate_env, proposed, asset, criticality, provenance, actor=None) -> Dict[str, Any]:
+    def _finish_gate(self, gate_env, proposed, asset, criticality, provenance, actor=None,
+                     rec_reco=None, rec_gate_env=None) -> Dict[str, Any]:
         gate = gate_env["data"]
         # The acting user comes from Databricks authentication when available (70/06); a self-typed
         # name is never accepted as authorization. Falls back to the planner stub in local mode.
         actor = actor or {"user_id": "planner-01", "roles": ["planner_scheduler"]}
-        # 9. draft_sap_change_package
+
+        # Coupling (70/10): the package drafts MAX's RECOMMENDATION, gated by the recommendation's
+        # own gate - so the package and the recommendation always agree. On the scope-blocked path
+        # (no recommendation supplied) it drafts the requested change as before (fail-closed).
+        if rec_reco is not None and rec_gate_env is not None:
+            pkg_reco = {**proposed, **rec_reco}  # rec type/direction wins; keep strategy context
+            pkg_gate_env = rec_gate_env
+            pkg_current = asset.get("current_value")
+            pkg_proposed = rec_reco.get("next_action") or rec_reco.get("type")
+        else:
+            pkg_reco, pkg_gate_env = proposed, gate_env
+            pkg_current, pkg_proposed = asset.get("current_value"), asset.get("proposed_value")
+        pkg_gate_status = pkg_gate_env["data"].get("gate_status")
+
+        # 9. draft_sap_change_package (drafts the recommendation on the in-scope path)
         pkg_env = draft_sap_change_package(
-            recommendation=proposed, gate_result=gate_env, evidence=[], criticality=criticality,
+            recommendation=pkg_reco, gate_result=pkg_gate_env, evidence=[], criticality=criticality,
             readiness=asset["readiness"], bu_profile=self.bu_profile,
-            current_value=asset.get("current_value"), proposed_value=asset.get("proposed_value"),
+            current_value=pkg_current, proposed_value=pkg_proposed,
             provenance=provenance, affected_sap_objects=["MaintenanceItem", "TaskList"],
         )
-        # 10. approval_workflow_state (initial)
+        # 10. approval_workflow_state (approves the PACKAGE, so it follows the package's gate)
         wf_env = approval_workflow_state(
             package_id=f"PKG-{asset['equipment_id']}", current_state="DRAFT",
             requested_transition="ANALYST_REVIEWED",
             actor=actor,
-            gate_status=gate.get("gate_status"), readiness=asset["readiness"],
+            gate_status=pkg_gate_status, readiness=asset["readiness"],
             approval_state=asset["approval_state"], creator_user_id=actor.get("user_id", "analyst-09"),
         )
         return {
+            # Headline gate = the requested change's gate (exercises all 4 statuses; demo + tests).
             "gate_status": gate.get("gate_status"), "gate_reason": gate_env.get("blocked_reason"),
             "gate_review_trigger": gate.get("review_trigger"),
             "required_approvers": gate.get("required_approvers", []),
             "allowed_next_actions": gate.get("allowed_next_actions", []),
             "blocked_actions": gate.get("blocked_actions", []),
-            "package": pkg_env["data"], "workflow": wf_env["data"],
+            # The package (and its approval path) follow MAX's recommendation.
+            "package": pkg_env["data"], "package_gate_status": pkg_gate_status,
+            "workflow": wf_env["data"],
         }
 
     def _summary(self, result: Dict[str, Any]) -> str:

@@ -32,11 +32,24 @@ def test_all_synthetic_no_sap_write_and_has_summary(agent):
         assert r["chat_summary"]
 
 
-def test_blocked_gate_yields_documentation_only(agent):
-    r = agent.run("COMP-2201")  # criticality-3 reduce -> BLOCKED
+def test_out_of_scope_yields_documentation_only(agent):
+    # The scope-blocked path packages the blocked request itself -> documentation-only, no submit.
+    r = agent.run("PUMP-4130")  # non-operated / JV -> out of analysis scope -> BLOCKED
     assert r["gate_status"] == "BLOCKED"
     assert r["package"]["package_type"] == "documentation_only"
     assert r["package"]["submit_path_available"] is False
+
+
+def test_blocked_request_packages_max_recommendation(agent):
+    # Coupling (70/10): the requested reduce is BLOCKED, but MAX recommends a safe keep-coverage
+    # improvement, and the PACKAGE drafts that recommendation (gated separately, never a submit path).
+    r = agent.run("COMP-2201")  # criticality-3 reduce -> requested change BLOCKED
+    assert r["gate_status"] == "BLOCKED"           # the requested change is still blocked (demo)
+    assert r["recommendation_diverges"] is True    # MAX recommends something other than the reduce
+    assert r["package"]["package_type"] == "draft_change_package"   # package follows the recommendation
+    assert r["package_gate_status"] != "BLOCKED"   # the recommendation itself is not blocked
+    assert r["package"]["submit_path_available"] is False           # still no direct-submit path
+    assert r["package"]["max_writes_sap"] is False
 
 
 def test_scope_blocked_assets(agent):

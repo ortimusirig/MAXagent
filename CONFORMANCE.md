@@ -16,7 +16,7 @@ All were valid. Fixes applied:
 | Finding | Fix | Residual |
 |---|---|---|
 | LLM narration could contradict the deterministic gate (user-facing) | Added a narration guard: a narration that affirms/approves a non-PASS gate is **rejected**, keeping the deterministic summary (`orchestrator._narration_contradicts_gate`) | Heuristic phrase list; not a semantic proof |
-| Gate/package evaluated `proposed`, not MAX's recommendation (70/10:107) | MAX's recommendation is **now also gate-checked** (`recommendation_gate_status`), and divergence from the change under review is surfaced in the Decision tab | The SAP **package** still drafts the change under review, not the recommendation - see D (partial) |
+| Gate/package evaluated `proposed`, not MAX's recommendation (70/10:107) | **Coupled**: the SAP package now drafts MAX's recommendation, gated by the recommendation's own gate; the requested change + its gate stay visible for the demo; out-of-scope stays documentation-only (fail-closed) | Closed |
 | SQL guard only checked scope column *names* | Guard now requires scope predicates to be **value/param bound** (`col = :param` / `IN(...)` / `= 'value'`); `IS NOT NULL` is rejected (`sql_guard._scope_bound`) | Server-side param binding in the executor still TODO - see F |
 | Approval buttons bypassed `approval_workflow_state` | Callback now routes each click through the tool: **verifies role, blocks self-approval, records denied attempts** (`app.on_approval`) | Databricks groups are not yet mapped to approver roles, so real users are denied until the BU profile maps them (correct fail-closed) |
 | PM Health queue missing "recommended next action" | Column added | - |
@@ -28,7 +28,7 @@ All were valid. Fixes applied:
 | A. 24 tool names / envelopes | Conformant |
 | B. `oxy_gate_check` (70/08) | Tool conformant (34 cases); the orchestrator now gates the recommendation too |
 | C. `pm_effectiveness_classifier` (70/09) | Conformant |
-| D. Core deterministic tools (70/10) | **Partial** - recommendation is now gate-checked, but the SAP package still drafts the change under review, not MAX's recommendation; full coupling (feed the recommendation into the package, recalibrate the synthetic fleet) is pending |
+| D. Core deterministic tools (70/10) | **Conformant** - the SAP package now drafts MAX's recommendation, gated by the recommendation's own gate (70/10:107 "every recommendation passes to oxy_gate_check"); the requested change + its gate remain visible; out-of-scope stays documentation-only (fail-closed) |
 | E. Two mandate types | Conformant |
 | F. Genie / SQL safety (70/05) | **Partial** - SELECT-only + view allowlist + value-bound scope guard built; server-side parameter binding, row-cap injection at execution, and rejected-SQL hash not built |
 | G. UI (60/04, 30/AppExp) | **Partial** - context bar, chat, pills, queue-first, drill-through, readiness, governed approval, next-action column built; durable approval persistence pending |
@@ -46,8 +46,6 @@ governed LLM-selected tool DAG that drives the recommendation/package, and it is
 
 ## Still deferred (with rationale)
 
-- **SAP package drives the change under review, not the recommendation** (70/10): reconciling these
-  (and recalibrating the 12-asset synthetic fleet + expected gate statuses) is the main open D item.
 - **Server-side SQL parameter binding + row-cap injection + rejected-SQL hash** (70/05): activate
   when SQL/Genie are bound; the pre-execution value-bound guard is built now.
 - **Bulk multi-table synthetic generator** (70/03): the 12-asset gate/classifier driver is

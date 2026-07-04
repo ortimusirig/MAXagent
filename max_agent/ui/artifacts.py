@@ -430,6 +430,14 @@ def render_sap_package(r: Dict[str, Any], audit: List[Dict[str, Any]] = None) ->
         html.Div([
             html.Div("DRAFT ONLY - MAX does not write to SAP in Wave 1. A human approves; MDC/BPDO or the official Oxy process updates SAP.",
                      style={"background": "#fff4e5", "border": "1px solid #f0c987", "borderRadius": "8px", "padding": "10px", "fontSize": "13px", "color": "#8a5a00", "marginBottom": "12px"}),
+            html.Div([
+                html.Span("This package drafts MAX's recommendation: ", style={"fontWeight": 600, "fontSize": "13px", "color": COLORS["ink"]}),
+                html.Span(f"{r.get('recommendation_type')} ", style={"fontSize": "13px", "color": COLORS["ink"], "fontWeight": 700}),
+                badge(r.get("package_gate_status"), STATUS_COLORS.get(r.get("package_gate_status"), COLORS["muted"])),
+                html.Div(f"Change you asked about: {r.get('change_under_review_type')} - gated as {r.get('gate_status')}."
+                         + (" (MAX recommends the above instead.)" if r.get("recommendation_diverges") else ""),
+                         style={**MUTED, "marginTop": "4px"}),
+            ], style={"marginBottom": "10px"}),
             html.Div("Package", style=H2),
             _kv("Type", p.get("package_type")),
             _kv("Current value", cv),
