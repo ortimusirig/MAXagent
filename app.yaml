@@ -17,6 +17,12 @@ env:
   - name: "LLM_AGENT_ENDPOINT"
     value: "databricks-claude-sonnet-4-6"
 
+  # AI orchestration ON: Sonnet selects + sequences the deterministic tools to answer (LangGraph
+  # react agent), with the mandatory-tool enforcer (scope -> classify -> gate always run, outputs
+  # authoritative). Several LLM calls per Ask (~20-30s). Unset this to fall back to single-call narration.
+  - name: "MAX_AGENTIC_ORCHESTRATION"
+    value: "1"
+
   # --- Optional Databricks bindings (uncomment + configure to use real data) ---
   # - name: "SQL_WAREHOUSE_ID"
   #   valueFrom: "sql-warehouse"        # resource key configured in the Databricks App

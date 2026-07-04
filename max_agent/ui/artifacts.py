@@ -486,10 +486,20 @@ def render_tool_trace(r: Dict[str, Any]) -> html.Div:
             str(detail)[:60],
             t.get("summary"),
         ])
+    llm_plan = r.get("llm_plan")
+    plan_block = html.Div()
+    if llm_plan:
+        plan_block = html.Div([
+            html.Div("LLM-planned tool sequence (Sonnet selected and sequenced these; mandatory ones enforced)",
+                     style={**MUTED, "marginTop": "8px"}),
+            html.Div(" -> ".join(str(p) for p in llm_plan),
+                     style={"fontSize": "12px", "color": COLORS["oxy"], "fontWeight": 600, "marginBottom": "6px"}),
+        ])
     return html.Div([
         html.Div([
             html.Div("Tool Trace (deterministic pipeline)", style=H2),
             html.Div(f"Databricks mode: {r.get('databricks_mode')}  |  {ctx}", style=MUTED),
+            plan_block,
             _table(["Tool", "Status", "Conf", "Reason", "Detail (SQL / template / gate)", "Summary"], rows),
         ], style=CARD),
     ])

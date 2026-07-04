@@ -1,19 +1,20 @@
 """LangGraph LLM tool-calling orchestration for the MAX Agent chat path.
 
-Models the finance agent's `create_react_agent` pattern (LangGraph ReAct + per-thread memory), but
-adds the GOVERNANCE FENCE the finance agent lacks:
+Sonnet SELECTS and SEQUENCES the real deterministic tools to answer the question (the finance-agent
+`create_react_agent` pattern), with the GOVERNANCE FENCE the finance agent lacks:
 
-- The deterministic safety spine (scope -> classifier -> gate -> package) has ALREADY run and is
-  AUTHORITATIVE. This layer only plans read-only tool calls to answer the user's question and
-  narrates; it never decides, skips, or overrides the gate/label (they are not in its writable
-  control - see agent_tools: the only tools are read-only).
-- Scope is locked into the tools, so the LLM cannot run unscoped SQL; any evidence() call still goes
-  through genie_query_scoped + the SELECT-only sql_guard.
-- The LLM cannot invent an Oxy value (the prompt forbids it and every number comes from a
-  deterministic tool result).
+- The AI calls the tools; each tool runs DETERMINISTIC Oxy logic (parameterized by the locked asset)
+  and returns its real output. The AI never computes or invents a gate/label/Oxy value - it reads
+  them from the tool results.
+- MANDATORY tools (lock_scope -> classify_effectiveness -> run_oxy_gate) are ENFORCED after the AI's
+  turn: if the AI skipped one it is run deterministically, so the governed decision always exists and
+  is deterministic. The separately-computed deterministic result (orchestrator._run_asset) remains
+  the authoritative source the UI renders; this layer contributes the AI's tool-call DAG + narration.
+- Retrieval stays scoped (genie_query_scoped + the SELECT-only sql_guard); the narration is guarded
+  against contradicting the gate.
 
-When langgraph / databricks_langchain / a serving endpoint are absent, `run_agentic_answer` returns
-None and the orchestrator keeps the deterministic summary (the sanctioned deterministic-only mode).
+Off unless MAX_AGENTIC_ORCHESTRATION is set (it makes several LLM calls per turn). When the stack /
+endpoint is absent, `run_agentic_answer` returns None and the caller keeps the single-call narration.
 """
 
 from __future__ import annotations
@@ -21,26 +22,28 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-REACT_MAX_STEPS = 6
+from .agent_tools import _MANDATORY
+
+REACT_MAX_STEPS = 8
 
 AGENT_SYSTEM_PROMPT = """You are MAX, a governed preventive-maintenance strategy copilot for Oxy.
 
-A deterministic governance engine has ALREADY decided this asset's gate status, effectiveness label,
-and recommendation. That decision is AUTHORITATIVE and final. Call governed_decision to read it. You
-must NEVER contradict, re-decide, or soften it, and you must NEVER state a different gate or label.
+Answer the user's question by CALLING tools. Each tool runs deterministic Oxy logic - you decide
+which tools to call and in what order; you never compute or guess their outputs yourself.
 
-Your job: answer the user's specific question using the read-only tools, then explain clearly.
-- evidence(question): data questions (work orders, cost, findings) about this asset.
-- like_equipment_comparison(): standardization / like-equipment questions.
-- execution_readiness(): task-list / materials / CBM / readiness questions.
-- portfolio_health(): fleet or review-queue level questions.
-Call only the tools you need; do not chain tools you were not asked about.
+For any question about whether a PM is effective or whether anything should change, you MUST establish
+the governed decision by calling, in dependency order:
+  lock_scope -> classify_effectiveness -> recommend_change -> run_oxy_gate
+Then call whichever of retrieve_evidence / check_data_readiness / execution_readiness /
+compare_like_equipment / portfolio_health the question needs, read the outputs, and answer.
 
 HARD RULES:
-- Never invent an Oxy value (thresholds, MOC %, approvers, cost, mandatory tags). If a number is not
-  in a tool result, say it is not available.
+- The gate status, effectiveness label, and recommendation come ONLY from run_oxy_gate /
+  classify_effectiveness / recommend_change. Never state a different gate or label than the tools
+  returned. Never invent an Oxy value (thresholds, MOC %, approvers, cost, mandatory tags) - if it is
+  not in a tool result, say it is not available.
 - Wave 1 is draft-only: MAX never writes SAP. Do not imply an action was taken.
-- Keep the answer to 3-6 plain-text sentences. No tables, no markdown, no emoji.
+- Answer in 3-6 sentences (headings/bold are fine; no emoji).
 """
 
 
@@ -79,28 +82,29 @@ def run_agentic_answer(agent, result: Dict[str, Any], question: str,
         from databricks_langchain import ChatDatabricks
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from .agent_tools import make_agent_tools
+        from .agent_tools import make_orchestration_tools, enforce_mandatory
 
-        llm = ChatDatabricks(endpoint=agent.client.llm_endpoint, max_tokens=700)
-        tools = make_agent_tools(agent, result)
+        asset = agent._fleet_index.get(result.get("equipment_id"))
+        if asset is None:
+            return None
+        state: Dict[str, Any] = {"time_window": result.get("time_window", "LAST_24_MONTHS")}
+        tools = make_orchestration_tools(agent, asset, state)
+        llm = ChatDatabricks(endpoint=agent.client.llm_endpoint, max_tokens=800)
         graph = create_react_agent(llm, tools, checkpointer=MemorySaver())
 
-        governed = (
-            f"Governed decision (authoritative): gate={result.get('gate_status')}, "
-            f"label={result.get('classifier_label')}, recommendation={result.get('recommendation_type')}, "
-            f"reason={result.get('gate_reason') or result.get('gate_review_trigger')}."
-        )
         messages = [
-            SystemMessage(content=AGENT_SYSTEM_PROMPT + "\n\n" + governed),
-            HumanMessage(content=f"Asset {result.get('equipment_id')}. Question: {question}"),
+            SystemMessage(content=AGENT_SYSTEM_PROMPT),
+            HumanMessage(content=(
+                f"Asset {result.get('equipment_id')} ({result.get('asset_class')}), plant "
+                f"{result.get('plant')}, criticality {result.get('criticality_code')}. Question: {question}")),
         ]
-        state = graph.invoke(
+        graph_state = graph.invoke(
             {"messages": messages},
             config={"configurable": {"thread_id": thread_id}, "recursion_limit": REACT_MAX_STEPS * 2},
         )
 
         narration, plan = "", []  # type: (str, List[str])
-        for m in state.get("messages", []):
+        for m in graph_state.get("messages", []):
             tcs = getattr(m, "tool_calls", None) or []
             for tc in tcs:
                 name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
@@ -109,6 +113,12 @@ def run_agentic_answer(agent, result: Dict[str, Any], question: str,
             content = getattr(m, "content", None)
             if content and not tcs and isinstance(content, str):
                 narration = content
+
+        # FENCE: guarantee the mandatory deterministic tools ran (run them if the AI skipped one).
+        enforce_mandatory(agent, asset, state)
+        for name in _MANDATORY:
+            if name not in plan:
+                plan.append(f"{name} (enforced)")
         return {"narration": narration.strip(), "plan": plan, "mode": "llm_orchestrated"}
     except Exception:
         return None

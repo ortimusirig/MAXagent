@@ -94,6 +94,39 @@ def test_answer_threads_question_through(monkeypatch):
     assert r["orchestration_mode"] == "llm_orchestrated"
 
 
+def test_orchestration_tools_match_the_deterministic_pipeline():
+    # The AI-callable tools run the REAL deterministic tools; their outputs must equal what the
+    # hardcoded pipeline computes - so Sonnet calling them can never diverge from the governed result.
+    import pytest
+    pytest.importorskip("langchain_core")
+    from max_agent.agent_tools import make_orchestration_tools
+    agent = MaxAgent()
+    for eid in ("PUMP-4102", "COMP-2201"):
+        asset = agent._fleet_index[eid]
+        state = {"time_window": "LAST_24_MONTHS"}
+        tools = {t.name: t for t in make_orchestration_tools(agent, asset, state)}
+        clf = tools["classify_effectiveness"].invoke({})
+        rec = tools["recommend_change"].invoke({})
+        gate = tools["run_oxy_gate"].invoke({})
+        r = agent.run(eid)
+        assert clf["label"] == r["classifier_label"]
+        assert rec["type"] == r["recommendation_type"]
+        assert gate["gate_status"] == r["recommendation_gate_status"]
+
+
+def test_enforcer_runs_mandatory_tools_when_ai_skips_them():
+    import pytest
+    pytest.importorskip("langchain_core")
+    from max_agent.agent_tools import enforce_mandatory
+    agent = MaxAgent()
+    asset = agent._fleet_index["COMP-2201"]
+    state = {"time_window": "LAST_24_MONTHS"}  # AI called nothing
+    out = enforce_mandatory(agent, asset, state)
+    assert out["scope"] is not None
+    assert out["classifier"]["label"] == "Governance Review Required"
+    assert out["gate"]["gate_status"] in {"PASS", "REVIEW_REQUIRED", "BLOCKED", "DRAFT_ONLY"}
+
+
 def test_agent_tools_read_governed_decision():
     # make_agent_tools needs langchain_core; skip cleanly when the agentic stack is absent.
     import pytest
