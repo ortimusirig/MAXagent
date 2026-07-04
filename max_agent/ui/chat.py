@@ -1,9 +1,5 @@
-"""Chat-answer rendering for the left panel.
-
-Renders the answer as markdown (so an LLM's headings/bold/lists look clean) and shows a badge stating
-whether the answer was LLM-generated or the deterministic fallback. The DECISION is always
-deterministic (see the pills / Decision tab); this panel is only the narration.
-"""
+"""Chat bubbles for the left panel. MAX-branded (no "LLM" wording): a user question bubble, MAX's
+answer bubble (markdown), and a live "MAX is ..." thinking indicator."""
 
 from __future__ import annotations
 
@@ -13,27 +9,45 @@ from dash import dcc, html
 
 from .theme import COLORS
 
-# orchestration_mode -> (badge label, color)
-_MODE = {
-    "llm_narrated": ("LLM-generated answer", "#1a7f37"),
-    "llm_orchestrated": ("LLM tool-calling answer", "#1a7f37"),
-    "llm_narration_rejected": ("LLM answer rejected - deterministic shown", "#b7791f"),
-    "deterministic_only": ("Deterministic answer (bind an LLM endpoint for prose)", COLORS["muted"]),
+# tool name -> friendly progress phrase shown while MAX runs it
+STEP_LABELS = {
+    "thinking": "thinking",
+    "synthesizing": "synthesizing the answer",
+    "lock_scope": "checking the asset scope",
+    "retrieve_evidence": "retrieving scoped evidence",
+    "classify_effectiveness": "classifying PM effectiveness",
+    "check_data_readiness": "checking data readiness",
+    "recommend_change": "forming a recommendation",
+    "run_oxy_gate": "running the Oxy governance gate",
+    "execution_readiness": "checking execution readiness",
+    "compare_like_equipment": "comparing like equipment",
+    "portfolio_health": "reviewing the PM portfolio",
 }
 
 
-def render_chat(result: Dict[str, Any]) -> html.Div:
-    if "error" in result:
-        return html.Div(result["error"], style={"color": "#b42318"})
-    summary = result.get("chat_summary", "") or ""
-    label, color = _MODE.get(result.get("orchestration_mode", "deterministic_only"), _MODE["deterministic_only"])
+def render_user_bubble(text: str) -> html.Div:
+    return html.Div(text or "", className="max-user-bubble")
+
+
+def render_thinking(step: str) -> html.Div:
+    """The live indicator: a pulsing dot + 'MAX is <friendly step>...'."""
+    phrase = STEP_LABELS.get(step, step or "thinking")
     return html.Div([
-        html.Span(label, style={
-            "display": "inline-block", "padding": "2px 9px", "borderRadius": "999px",
-            "background": color, "color": "white", "fontSize": "11px", "fontWeight": 700, "marginBottom": "8px",
-        }),
+        html.Span(className="max-thinking-dot"),
+        html.Span(f"MAX is {phrase}...", className="max-thinking"),
+    ], style={"display": "flex", "alignItems": "center", "padding": "6px 2px"})
+
+
+def render_chat(result: Dict[str, Any]) -> html.Div:
+    """MAX's answer bubble. Empty until MAX has answered."""
+    if not result:
+        return html.Div()
+    if "error" in result:
+        return html.Div(result["error"], className="max-answer-bubble", style={"color": "#b42318"})
+    summary = result.get("chat_summary", "") or ""
+    if not summary:
+        return html.Div()
+    return html.Div([
+        html.Div("MAX", style={"fontSize": "11px", "fontWeight": 700, "color": COLORS["oxy"], "marginBottom": "4px"}),
         dcc.Markdown(summary, style={"fontSize": "13px", "lineHeight": "1.5", "color": COLORS["ink"]}),
-    ], style={
-        "background": "#eef4fb", "border": f"1px solid {COLORS['line']}",
-        "borderRadius": "10px", "padding": "14px",
-    })
+    ], className="max-answer-bubble")

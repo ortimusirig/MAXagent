@@ -68,7 +68,7 @@ def agentic_available(client) -> bool:
 
 
 def run_agentic_answer(agent, result: Dict[str, Any], question: str,
-                       thread_id: str = "default") -> Optional[Dict[str, Any]]:
+                       thread_id: str = "default", on_step=None) -> Optional[Dict[str, Any]]:
     """Answer `question` about the already-governed `result` via a LangGraph react agent.
 
     Returns {"narration", "plan", "mode"} or None when the agentic stack / endpoint is unavailable
@@ -103,15 +103,21 @@ def run_agentic_answer(agent, result: Dict[str, Any], question: str,
         ]
         narration, plan = "", []  # type: (str, List[str])
         for _ in range(REACT_MAX_STEPS):
+            if on_step:
+                on_step("thinking")
             resp = llm.invoke(messages)
             messages.append(resp)
             tcs = getattr(resp, "tool_calls", None) or []
             if not tcs:
+                if on_step:
+                    on_step("synthesizing")
                 narration = resp.content if isinstance(resp.content, str) else narration
                 break
             for tc in tcs:
                 name = tc.get("name")
                 plan.append(name)
+                if on_step:
+                    on_step(name)  # report the tool MAX is running (UI shows a friendly label)
                 fn = tool_map.get(name)
                 out = fn.invoke(tc.get("args", {}) or {}) if fn else {"error": f"unknown tool {name}"}
                 messages.append(ToolMessage(content=json.dumps(out, default=str), tool_call_id=tc.get("id")))

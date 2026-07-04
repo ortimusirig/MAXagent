@@ -82,7 +82,7 @@ def test_answer_threads_question_through(monkeypatch):
     agent = MaxAgent()
     seen = {}
 
-    def _stub(_agent, result, question, thread_id="default"):
+    def _stub(_agent, result, question, thread_id="default", **_k):
         seen["question"] = question
         seen["eid"] = result.get("equipment_id")
         return {"narration": "ok", "plan": [], "mode": "llm_orchestrated"}

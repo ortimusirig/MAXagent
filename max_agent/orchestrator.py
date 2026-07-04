@@ -91,7 +91,7 @@ class MaxAgent:
     # --- single-asset run --------------------------------------------------
     def run(self, equipment_id: str, actor: Optional[Dict[str, Any]] = None,
             time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None,
-            question: Optional[str] = None, thread_id: str = "default") -> Dict[str, Any]:
+            question: Optional[str] = None, thread_id: str = "default", on_step=None) -> Dict[str, Any]:
         asset = self._fleet_index.get(equipment_id)
         if asset is None:
             return {"error": f"Unknown asset: {equipment_id}", "known_assets": list(self._fleet_index)}
@@ -103,9 +103,11 @@ class MaxAgent:
         if question:
             result["user_question"] = question
             # Optional LLM tool-calling orchestration (react agent) first; it may set the mode.
-            self._apply_agentic_narration(result, question, thread_id)
+            self._apply_agentic_narration(result, question, thread_id, on_step=on_step)
             if result["orchestration_mode"] == "deterministic_only":
                 # Default answer: one question-aware LLM narration (or deterministic when unbound).
+                if on_step:
+                    on_step("synthesizing")
                 result["chat_summary"] = self._summary(result)
                 if self.client.llm_bound():
                     result["orchestration_mode"] = "llm_narrated"
@@ -128,7 +130,7 @@ class MaxAgent:
         result["user_question"] = text or result.get("user_question")
         return result
 
-    def _apply_agentic_narration(self, result: Dict[str, Any], question: str, thread_id: str = "default") -> None:
+    def _apply_agentic_narration(self, result: Dict[str, Any], question: str, thread_id: str = "default", on_step=None) -> None:
         """LLM tool-calling narration layer (finance-agent style, with a governance fence).
 
         The deterministic result stays AUTHORITATIVE: this ONLY replaces the chat narration, and only
@@ -139,7 +141,7 @@ class MaxAgent:
             return
         try:
             from .agent_loop import run_agentic_answer
-            ans = run_agentic_answer(self, result, question, thread_id)
+            ans = run_agentic_answer(self, result, question, thread_id, on_step=on_step)
         except Exception:
             ans = None
         if ans and ans.get("narration"):

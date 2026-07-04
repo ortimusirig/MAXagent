@@ -1,6 +1,6 @@
-"""Top-level layout: header, top context bar (filters that drive scope), left conversation
-panel (chat input + pills + answer), right artifact tabs. Queue-first: PM Health is the landing
-tab (30/AppExp), and chat / row drill-through both lock the same run context."""
+"""Top-level layout: header, top context bar (filters that drive scope), left conversation panel
+(ChatGPT-style: transcript on top, input pinned at the bottom), right artifact tabs. The chat starts
+empty; MAX shows a live 'thinking / running <tool> / synthesizing' status while it works."""
 
 from __future__ import annotations
 
@@ -43,7 +43,6 @@ def build_layout(agent: MaxAgent) -> html.Div:
                  style={"fontSize": "11px", "color": "#9fc0e6", "marginTop": "2px"}),
     ], style={"background": COLORS["oxy"], "padding": "14px 22px"})
 
-    # Top context/filter region: the controls drive the backend scope, not just the view.
     filters = html.Div([
         html.Div([html.Span("Asset", style={**MUTED, "marginRight": "6px"}),
                   dcc.Dropdown(id="asset-dropdown", options=asset_options, value=first, clearable=False,
@@ -60,22 +59,31 @@ def build_layout(agent: MaxAgent) -> html.Div:
 
     context_bar = html.Div(id="context-bar")
 
+    # Left: chat transcript (grows, scrolls) on top; input pinned at the bottom.
     left = html.Div([
-        html.Div("Ask MAX", style={"fontWeight": 700, "color": COLORS["ink"], "marginBottom": "6px"}),
-        dcc.Input(id="chat-input", type="text", debounce=True,
-                  placeholder="e.g. Is this compressor's PM effective? or type an asset id",
-                  style={"width": "100%", "padding": "8px", "fontSize": "13px", "boxSizing": "border-box",
-                         "border": f"1px solid {COLORS['line']}", "borderRadius": "8px"}),
-        html.Button("Ask", id="chat-send", n_clicks=0,
-                    style={"marginTop": "8px", "border": "none", "borderRadius": "8px", "padding": "8px 16px",
-                           "background": COLORS["oxy"], "color": "white", "fontWeight": 700, "cursor": "pointer"}),
-        html.Div(id="chat-echo", style={"marginTop": "10px"}),
-        html.Div(id="tool-pills", style={"marginTop": "10px"}),
-        html.Div(id="user-question", style={**MUTED, "fontStyle": "italic", "margin": "8px 0"}),
-        html.Div(id="chat-output"),
-        html.Div("The demo is a straw man. Every value is synthetic or PROPOSED; MAX does not decide Oxy policy.",
-                 style={**MUTED, "marginTop": "12px", "fontSize": "11px"}),
-    ], style={"width": "34%", "minWidth": "320px", "padding": "18px", "borderRight": f"1px solid {COLORS['line']}", "boxSizing": "border-box", "overflowY": "auto"})
+        html.Div("Ask MAX", style={"fontWeight": 700, "color": COLORS["ink"], "marginBottom": "8px"}),
+        html.Div([
+            html.Div(id="chat-echo"),      # the user's question (bubble)
+            html.Div(id="chat-output"),    # MAX's answer (bubble); empty until you ask
+            html.Div(id="chat-status"),    # live "MAX is thinking..." indicator
+        ], id="chat-scroll", style={
+            "flex": "1", "overflowY": "auto", "display": "flex", "flexDirection": "column",
+            "gap": "10px", "padding": "4px 2px 10px 2px",
+        }),
+        html.Div([
+            dcc.Input(id="chat-input", type="text", debounce=False,
+                      placeholder="Ask MAX about this asset...",
+                      style={"flex": "1", "padding": "10px", "fontSize": "13px", "boxSizing": "border-box",
+                             "border": f"1px solid {COLORS['line']}", "borderRadius": "10px"}),
+            html.Button("Ask", id="chat-send", n_clicks=0,
+                        style={"border": "none", "borderRadius": "10px", "padding": "10px 18px",
+                               "background": COLORS["oxy"], "color": "white", "fontWeight": 700, "cursor": "pointer"}),
+        ], style={"display": "flex", "gap": "8px", "alignItems": "center",
+                  "borderTop": f"1px solid {COLORS['line']}", "paddingTop": "10px"}),
+        html.Div("Straw man: every value is synthetic or PROPOSED; MAX does not decide Oxy policy.",
+                 style={**MUTED, "marginTop": "6px", "fontSize": "11px"}),
+    ], style={"width": "34%", "minWidth": "320px", "padding": "18px", "borderRight": f"1px solid {COLORS['line']}",
+              "boxSizing": "border-box", "display": "flex", "flexDirection": "column", "height": "100%"})
 
     tabs = dcc.Tabs(id="artifact-tabs", value="pmhealth", children=[
         dcc.Tab(label="PM Health", value="pmhealth", children=html.Div(id="tab-pmhealth", style={"padding": "12px"})),
@@ -94,4 +102,6 @@ def build_layout(agent: MaxAgent) -> html.Div:
         header, filters, context_bar, body,
         dcc.Store(id="approval-audit", data=[]),
         dcc.Store(id="chat-question"),
+        dcc.Store(id="session-id"),
+        dcc.Interval(id="thinking-interval", interval=600, n_intervals=0),
     ], style={"fontFamily": FONT, "background": COLORS["bg"], "color": COLORS["ink"], "minHeight": "100vh"})
