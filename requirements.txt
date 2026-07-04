@@ -1,0 +1,23 @@
+# MAX Agent - Databricks App
+# The deterministic tool core (max_agent/tools) needs only pyyaml. The Dash app adds the UI stack.
+# databricks-sdk is optional: the app runs in synthetic mode without it and uses it only when a
+# workspace / SQL warehouse / Genie space / serving endpoint are bound (see app.yaml).
+
+# Deterministic core + config
+pyyaml>=6.0
+
+# App UI (Dash + Plotly)
+dash>=2.17.0
+plotly>=5.18.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Databricks integration (optional at runtime; imported lazily)
+databricks-sdk>=0.30.0
+databricks-sql-connector>=3.0.0
+
+# Tests
+pytest>=7.0
+
+# Production WSGI server for Databricks Apps (optional; app.py also runs the Dash dev server)
+gunicorn>=21.0.0

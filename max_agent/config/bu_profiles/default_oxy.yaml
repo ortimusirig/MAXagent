@@ -1,0 +1,158 @@
+profile_id: default_oxy
+profile_version: 2026-07-default
+profile_status: draft
+source_anchor: Oxy Work Strategy Management Procedure 10.400.462
+# Source of truth for this profile is the vault copy:
+#   70 - MAX Agent Build/config/bu_profiles/default_oxy.yaml
+# Keep this file byte-aligned with the vault copy. BU-defined values stay null / BU_DEFINED
+# until Oxy confirms them in the Houston workshop. Do NOT pre-fill invented Oxy policy here.
+notes:
+  - Default profile is loadable for the MVP build.
+  - BU-specific thresholds and group names remain workshop decisions.
+  - Additional BUs should be modeled as anchor-plus-delta profiles.
+
+# --- Decision Register mapping: which workshop row sets each BU_DEFINED value ---
+# See 50 - Outputs/Workshop Decision Register - MAX Agent Scope.md
+#   criticality_pm_requirement_overrides "0"/"1" . C1 / C2
+#   classifier_thresholds ........................ B1 / P2  (values in Risk Scorecard Worksheet)
+#   moc_threshold ................................ C3
+#   approver_role_group_map ...................... D1r (work_strategy_owner), D3r (routing)
+#   mdc_bpdo_binding ............................. D2r
+#   enabled_strategy_types / enabled_analysis_methods . C8
+#   rbi_by_jurisdiction_enabled .................. C4
+#   scope_applicability .......................... E1
+#   optional_step_toggles ........................ E2 (odr), E3 (level_loading)
+#   critical_work_code_catalog ................... C7  (mandatory-PM tag source: B2)
+#   hse_criticality_band_definitions ............. C6
+#   reevaluation_cadence ......................... C5
+
+criticality_pm_requirement_overrides:
+  # MANDATORY = asset strategy-coverage mandate: the asset must keep an adequate strategy,
+  # so oxy_gate_check blocks reduce/retire/RTF on evidence alone. It does NOT freeze the PM -
+  # keep-coverage improvements route through governance review. A per-PM regulatory basis
+  # (pm_governance.mandatory_pm / Table 2 PM_REG/PM_STA/PM_HSE) is the stricter, separate signal.
+  "0": BU_DISCRETION
+  "1": BU_DISCRETION
+  "2": MANDATORY
+  "3": MANDATORY
+  "4": MANDATORY
+  "N": NOT_REQUIRED
+
+classifier_thresholds:
+  status: BU_DEFINED - set in workshop (Risk Scorecard)
+  failure_after_pm_rate_max: null
+  mtbf_improvement_min: null
+  repeat_failure_rate_max: null
+  finding_rate_effective_min: null
+  finding_rate_low_floor: null
+  pm_to_corrective_ratio_band: null
+  cost_per_finding_max: null
+  planned_vs_actual_variance_max: null
+  evidence_confidence_floor: null
+
+moc_threshold:
+  status: BU_DEFINED - set in workshop
+  change_magnitude_requires_moc: null
+  default_outcome_when_exceeded: REVIEW_REQUIRED
+
+approver_role_group_map:
+  work_strategy_owner:
+    procedure_binding: SAP Task List Planner Group
+    group: BU_DEFINED - set in workshop
+  planner_scheduler:
+    procedure_binding: Planner and/or Scheduler
+    group: BU_DEFINED - set in workshop
+  work_management_supervisor:
+    procedure_binding: Work Management Supervisor
+    group: BU_DEFINED - set in workshop
+  technician_operator_inspector:
+    procedure_binding: Technician, Operator, or Inspector
+    group: BU_DEFINED - set in workshop
+  work_management_engineer:
+    procedure_binding: Work Management Engineer
+    group: BU_DEFINED - set in workshop
+  mdc_bpdo:
+    procedure_binding: Master Data Coordinator / BPDO
+    group: BU_DEFINED - set in workshop
+  equipment_sme:
+    procedure_binding: Equipment SME
+    group: BU_DEFINED - set in workshop
+  maintenance_manager:
+    procedure_binding: Maintenance Manager
+    group: BU_DEFINED - set in workshop
+  compliance_safety:
+    procedure_binding: Compliance/Safety
+    group: BU_DEFINED - set in workshop
+
+mdc_bpdo_binding:
+  state: Master Data Submitted
+  procedure_binding: Master Data Coordinator / BPDO
+  group: BU_DEFINED - set in workshop
+
+enabled_strategy_types:
+  - TIME_BASED
+  - CONDITION_BASED
+  - RISK_BASED
+  - RTF
+  - DESIGN_OUT
+
+enabled_analysis_methods:
+  - EXISTING_STRATEGY
+  - PMO
+  - FMEA
+  - RBI
+  - RCM
+
+rbi_by_jurisdiction_enabled: false
+
+scope_applicability:
+  # Policy + source-field config only. Per-asset operated_status / exemption_status / exemption_id
+  # come from the master-data lookup (read by validate_scope), NOT from this profile.
+  operated_only: true
+  exemption_policy:
+    exemption_source_field: BU_DEFINED - set in workshop   # SAP field/flag that marks an exemption
+    governed_by: 60.400.003
+  notes:
+    - Procedure p.3 - non-operated / JV assets are excluded from analysis scope.
+    - exemption_policy is BU policy; whether a specific asset is exempt is asset state from master data.
+
+optional_step_toggles:
+  odr: false
+  level_loading: false
+
+critical_work_code_catalog:
+  - code: PM_MCW
+    description: Maintenance Critical Work
+  - code: PM_MEI
+    description: Mechanical Integrity Critical Work
+  - code: PM_REG
+    description: Regulatory Requirements Work
+  - code: PM_STA
+    description: Statutory Requirements Work
+  - code: PM_KME
+    description: Key Mitigation Elements Work
+  - code: PM_CME
+    description: Critical Mitigation Elements Work
+  - code: PM_HSE
+    description: Health, Safety, and Environment Work
+
+practicality_checklist:
+  - access
+  - isolation_safety
+  - sequencing
+  - resources_hours
+  - external_service_requirements
+  - materials_components
+  - documentation_prt
+  - acceptance_criteria
+
+hse_criticality_band_definitions:
+  status: BU_DEFINED - set in workshop
+
+reevaluation_cadence:
+  status: BU_DEFINED - set in workshop
+  days: null
+  max_days: 1825
+  default_outcome_when_past_due: REVIEW_REQUIRED
+  notes:
+    - max_days is the procedure's 5-year ceiling (3.6.4); days must be <= max_days.

@@ -1,0 +1,25 @@
+{
+  "_comment": "Golden-set regression harness for oxy_gate_check and pm_effectiveness_classifier (08 / 09). Labeled cases; every threshold/rule change re-runs this set to show whether any agreed outcome changed. Classifier cases with thresholds='set' use the TEST-ONLY straw-man bands; thresholds='unset' use the shipped null profile. These are PROPOSED example outcomes, not Oxy-approved values.",
+  "gate_cases": [
+    {"name": "pass_noncritical_retain", "overrides": {}, "expected_gate_status": "PASS"},
+    {"name": "review_frequency_trial", "overrides": {"recommendation": {"type": "PM_FREQUENCY_CHANGE", "direction": "SHORTEN"}, "risk": {"risk_scorecard_available": true, "risk_result": "REVIEW", "risk_threshold_met": true}}, "expected_gate_status": "REVIEW_REQUIRED"},
+    {"name": "blocked_frequency_reduction_no_scorecard", "overrides": {"recommendation": {"type": "PM_FREQUENCY_CHANGE", "direction": "EXTEND"}, "risk": {"risk_scorecard_available": false}}, "expected_gate_status": "BLOCKED", "expected_blocked_reason": "RISK_SCORECARD_REQUIRED"},
+    {"name": "blocked_direct_sap", "overrides": {"requested_action": "DIRECT_SAP_UPDATE"}, "expected_gate_status": "BLOCKED", "expected_blocked_reason": "DIRECT_SAP_UPDATE_OUT_OF_SCOPE"},
+    {"name": "review_criticality_unvalidated", "overrides": {"criticality": {"code": "0", "validation_status": "NOT_VALIDATED"}, "recommendation": {"type": "ADD_INSPECTION"}}, "expected_gate_status": "REVIEW_REQUIRED"},
+    {"name": "blocked_mandatory_coverage_reduction", "overrides": {"pm_governance": {"mandatory_pm": true}, "recommendation": {"type": "RETIRE_PM"}, "risk": {"risk_scorecard_available": true, "risk_result": "PASS", "risk_threshold_met": true}}, "expected_gate_status": "BLOCKED", "expected_blocked_reason": "MANDATORY_PM_CANNOT_REDUCE_COVERAGE"},
+    {"name": "blocked_cbm_no_readings", "overrides": {"recommendation": {"type": "ADD_CBM"}, "readiness": {"cbm_real_readings_available": false, "cbm_synthetic_data_flag": false}}, "expected_gate_status": "BLOCKED", "expected_blocked_reason": "CBM_REQUIRES_REAL_MEASUREMENT_READINGS"},
+    {"name": "draft_only_synthetic_cbm", "overrides": {"recommendation": {"type": "ADD_CBM"}, "readiness": {"cbm_real_readings_available": false, "cbm_synthetic_data_flag": true}, "requested_action": "DRAFT_PACKAGE"}, "expected_gate_status": "DRAFT_ONLY", "expected_blocked_reason": "CBM_SYNTHETIC_DEMO_ONLY"},
+    {"name": "blocked_abc4_object_dependency", "overrides": {"criticality": {"code": "4", "validation_status": "VALIDATED"}, "recommendation": {"type": "ADD_INSPECTION"}, "readiness": {"object_dependency_code": null}}, "expected_gate_status": "BLOCKED", "expected_blocked_reason": "ABC4_OBJECT_DEPENDENCY_REQUIRED"},
+    {"name": "draft_only_level_loading_deferred", "overrides": {"recommendation": {"type": "TASK_LIST_CLEANUP"}, "readiness": {"level_loading_status": "DEFERRED_WAVE_1", "practicality_status": "COMPLETE"}, "requested_action": "MASTER_DATA_SUBMIT"}, "expected_gate_status": "DRAFT_ONLY", "expected_blocked_reason": "LEVEL_LOADING_DEFERRED_WAVE_1"}
+  ],
+  "classifier_cases": [
+    {"name": "effective", "thresholds": "set", "overrides": {"criticality": {"code": "1", "validation_status": "VALIDATED"}}, "expected_label": "Effective"},
+    {"name": "needs_improvement_tasklist", "thresholds": "set", "overrides": {"criticality": {"code": "1", "validation_status": "VALIDATED"}, "pm_attributes": {"task_list_complete": false}}, "expected_label": "Needs Improvement"},
+    {"name": "ineffective_nonmandatory", "thresholds": "set", "overrides": {"criticality": {"code": "1", "validation_status": "VALIDATED"}, "effectiveness_signals": {"failure_after_pm_rate": 0.4, "mtbf_trend": "DECLINING", "repeat_failure_rate": 0.2}}, "expected_label": "Ineffective"},
+    {"name": "missing_evidence_null_signal", "thresholds": "set", "overrides": {"criticality": {"code": "1", "validation_status": "VALIDATED"}, "effectiveness_signals": {"failure_after_pm_rate": null}}, "expected_label": "Missing Evidence"},
+    {"name": "governance_criticality_4", "thresholds": "set", "overrides": {"criticality": {"code": "4", "validation_status": "VALIDATED"}}, "expected_label": "Governance Review Required"},
+    {"name": "governance_low_findings_mandatory_not_waste", "thresholds": "set", "overrides": {"criticality": {"code": "4", "validation_status": "VALIDATED"}, "effectiveness_signals": {"finding_rate": 0.001}}, "expected_label": "Governance Review Required"},
+    {"name": "nonmandatory_low_findings_guarded_effective", "thresholds": "set", "overrides": {"criticality": {"code": "1", "validation_status": "VALIDATED"}, "effectiveness_signals": {"finding_rate": 0.001, "failure_after_pm_rate": 0.02, "mtbf_trend": "IMPROVING", "repeat_failure_rate": 0.01}}, "expected_label": "Effective"},
+    {"name": "describe_and_flag_thresholds_unset", "thresholds": "unset", "overrides": {"criticality": {"code": "1", "validation_status": "VALIDATED"}}, "expected_label": "Missing Evidence"}
+  ]
+}

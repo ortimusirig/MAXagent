@@ -1,0 +1,21 @@
+{
+  "_comment": "Metadata for the synthetic MAX Agent fleet. All data is manufactured (synthetic_data_flag=true) and invents no Oxy policy value. Source of truth is max_agent/synthetic_data.py.",
+  "provenance": "SYNTHETIC",
+  "equipment_category": "R (rotating-only, matches SOAR sample)",
+  "bu_profile": "default_oxy",
+  "classifier_thresholds": "null (describe-and-flag until Oxy confirms B1/P2)",
+  "assets": [
+    {"equipment_id": "PUMP-4102", "criticality": "1", "expected_gate_status": "PASS"},
+    {"equipment_id": "PUMP-4110", "criticality": "2", "expected_gate_status": "REVIEW_REQUIRED"},
+    {"equipment_id": "COMP-2201", "criticality": "3", "expected_gate_status": "BLOCKED"},
+    {"equipment_id": "VALVE-3301", "criticality": "4", "expected_gate_status": "BLOCKED"},
+    {"equipment_id": "PUMP-4115", "criticality": "2", "expected_gate_status": "BLOCKED"},
+    {"equipment_id": "PUMP-4116", "criticality": "1", "expected_gate_status": "DRAFT_ONLY"},
+    {"equipment_id": "MOTOR-5501", "criticality": "1", "expected_gate_status": "DRAFT_ONLY"},
+    {"equipment_id": "PUMP-4120", "criticality": "3", "expected_gate_status": "BLOCKED"},
+    {"equipment_id": "HX-6601", "criticality": "0", "expected_gate_status": "REVIEW_REQUIRED"},
+    {"equipment_id": "PUMP-4130", "criticality": "2", "expected_gate_status": "BLOCKED"},
+    {"equipment_id": "PUMP-4140", "criticality": "1", "expected_gate_status": "BLOCKED"},
+    {"equipment_id": "FAN-7701", "criticality": "1", "expected_gate_status": "REVIEW_REQUIRED"}
+  ]
+}

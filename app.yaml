@@ -1,0 +1,29 @@
+# Databricks Apps manifest for the MAX Agent app.
+# The app runs in synthetic-first mode by default (no resources required). Bind the resources
+# below to leave synthetic mode - no code change is needed; the databricks_client picks them up.
+# Do NOT hardcode tokens; the app runs as the app service principal.
+
+command:
+  - "python"
+  - "app.py"
+
+env:
+  - name: "MAX_ENV"
+    value: "dev"
+
+  # --- Optional Databricks bindings (uncomment + configure to use real data) ---
+  # - name: "SQL_WAREHOUSE_ID"
+  #   valueFrom: "sql-warehouse"        # resource key configured in the Databricks App
+  # - name: "GENIE_SPACE_ID"
+  #   valueFrom: "genie-space"
+  # - name: "LLM_AGENT_ENDPOINT"
+  #   value: "databricks-claude-sonnet-4-6"
+  # - name: "MAX_CATALOG"
+  #   value: "oxy_pm"
+  # - name: "MAX_SCHEMA"
+  #   value: "max_agent"
+
+# Notes:
+# - $DATABRICKS_APP_PORT is provided by the runtime; app.py binds to it (local fallback 8000).
+# - Use Databricks App resources + the app service principal for SQL/Genie/serving auth.
+# - Wave 1 is draft-only: MAX never performs a direct SAP write-back.
