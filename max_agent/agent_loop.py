@@ -1,7 +1,8 @@
-"""LangGraph LLM tool-calling orchestration for the MAX Agent chat path.
+"""LLM tool-calling orchestration for the MAX Agent chat path.
 
-Sonnet SELECTS and SEQUENCES the real deterministic tools to answer the question (the finance-agent
-`create_react_agent` pattern), with the GOVERNANCE FENCE the finance agent lacks:
+Sonnet SELECTS and SEQUENCES the real deterministic tools to answer the question, via a manual
+`bind_tools` loop (the supply-chain agent pattern; no langgraph, which avoids its version fragility),
+with the GOVERNANCE FENCE the finance/supply-chain agents lack:
 
 - The AI calls the tools; each tool runs DETERMINISTIC Oxy logic (parameterized by the locked asset)
   and returns its real output. The AI never computes or invents a gate/label/Oxy value - it reads
@@ -59,7 +60,6 @@ def agentic_available(client) -> bool:
     if not bool(getattr(client, "llm_bound", lambda: False)()):
         return False
     try:
-        import langgraph  # noqa: F401
         import databricks_langchain  # noqa: F401
         import langchain_core  # noqa: F401
     except Exception:
@@ -77,48 +77,50 @@ def run_agentic_answer(agent, result: Dict[str, Any], question: str,
     if not agentic_available(agent.client):
         return None
     try:
-        from langgraph.prebuilt import create_react_agent
-        from langgraph.checkpoint.memory import MemorySaver
-        from databricks_langchain import ChatDatabricks
-        from langchain_core.messages import HumanMessage, SystemMessage
+        import json
 
-        from .agent_tools import make_orchestration_tools, enforce_mandatory
+        from databricks_langchain import ChatDatabricks
+        from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+
+        from .agent_tools import enforce_mandatory, make_orchestration_tools
 
         asset = agent._fleet_index.get(result.get("equipment_id"))
         if asset is None:
             return None
         state: Dict[str, Any] = {"time_window": result.get("time_window", "LAST_24_MONTHS")}
         tools = make_orchestration_tools(agent, asset, state)
-        llm = ChatDatabricks(endpoint=agent.client.llm_endpoint, max_tokens=800)
-        graph = create_react_agent(llm, tools, checkpointer=MemorySaver())
+        tool_map = {t.name: t for t in tools}
+        # Manual tool-calling loop (ChatDatabricks.bind_tools) - no langgraph, avoids its version
+        # fragility. This is the finance/supply-chain agent pattern: invoke -> run tool_calls -> feed
+        # ToolMessages back -> repeat until the model answers.
+        llm = ChatDatabricks(endpoint=agent.client.llm_endpoint, max_tokens=800).bind_tools(tools)
 
-        messages = [
+        messages: List[Any] = [
             SystemMessage(content=AGENT_SYSTEM_PROMPT),
             HumanMessage(content=(
                 f"Asset {result.get('equipment_id')} ({result.get('asset_class')}), plant "
                 f"{result.get('plant')}, criticality {result.get('criticality_code')}. Question: {question}")),
         ]
-        graph_state = graph.invoke(
-            {"messages": messages},
-            config={"configurable": {"thread_id": thread_id}, "recursion_limit": REACT_MAX_STEPS * 2},
-        )
-
         narration, plan = "", []  # type: (str, List[str])
-        for m in graph_state.get("messages", []):
-            tcs = getattr(m, "tool_calls", None) or []
+        for _ in range(REACT_MAX_STEPS):
+            resp = llm.invoke(messages)
+            messages.append(resp)
+            tcs = getattr(resp, "tool_calls", None) or []
+            if not tcs:
+                narration = resp.content if isinstance(resp.content, str) else narration
+                break
             for tc in tcs:
-                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
-                if name:
-                    plan.append(name)
-            content = getattr(m, "content", None)
-            if content and not tcs and isinstance(content, str):
-                narration = content
+                name = tc.get("name")
+                plan.append(name)
+                fn = tool_map.get(name)
+                out = fn.invoke(tc.get("args", {}) or {}) if fn else {"error": f"unknown tool {name}"}
+                messages.append(ToolMessage(content=json.dumps(out, default=str), tool_call_id=tc.get("id")))
 
         # FENCE: guarantee the mandatory deterministic tools ran (run them if the AI skipped one).
         enforce_mandatory(agent, asset, state)
         for name in _MANDATORY:
             if name not in plan:
                 plan.append(f"{name} (enforced)")
-        return {"narration": narration.strip(), "plan": plan, "mode": "llm_orchestrated"}
+        return {"narration": (narration or "").strip(), "plan": plan, "mode": "llm_orchestrated"}
     except Exception:
         return None

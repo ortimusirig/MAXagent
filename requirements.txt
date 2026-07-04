@@ -16,10 +16,9 @@ numpy>=1.24.0
 databricks-sdk>=0.30.0
 databricks-sql-connector>=3.0.0
 
-# LLM tool-calling orchestration (optional; imported lazily in agent_loop.py). The chat path uses a
-# LangGraph react agent to plan read-only tools + narrate when LLM_AGENT_ENDPOINT is bound; without
-# these packages (or an endpoint) the app runs the sanctioned deterministic-only mode.
-langgraph>=0.2.0
+# LLM tool-calling orchestration (optional; imported lazily in agent_loop.py). Sonnet selects +
+# sequences the deterministic tools via a manual bind_tools loop (no langgraph - avoids its version
+# fragility). Without these packages (or an endpoint) the app runs the sanctioned deterministic mode.
 databricks-langchain>=0.1.0
 langchain-core>=0.3.0
 
