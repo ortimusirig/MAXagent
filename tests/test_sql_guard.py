@@ -58,7 +58,26 @@ def test_missing_scope_filter_is_not_passed():
     sql = "SELECT * FROM v_work_order_history"  # no equipment_id / time predicate
     v = validate_generated_sql(sql, _ALLOW, _SCOPE)
     assert v["status"] == "WARN"
-    assert "SCOPE_FILTER_MISSING" in v["reasons"]
+    assert "SCOPE_FILTER_NOT_BOUND" in v["reasons"]
+
+
+def test_column_present_but_not_value_bound_is_rejected():
+    # The exact bypass the review found: columns appear but are NOT bound to PUMP-4110 / the window.
+    sql = ("SELECT order_type FROM v_work_order_history "
+           "WHERE equipment_id IS NOT NULL AND posting_date >= date_sub(current_date(), 30)")
+    v = validate_generated_sql(sql, _ALLOW, _SCOPE)
+    assert v["status"] != "PASSED"
+    assert v["scope_filter_present"] is False
+    assert "SCOPE_FILTER_NOT_BOUND" in v["reasons"]
+    assert set(v.get("missing_scope_predicates", [])) == {"equipment_id", "time_window"}
+
+
+def test_equality_to_wrong_value_is_not_bound():
+    sql = ("SELECT order_type FROM v_work_order_history "
+           "WHERE equipment_id = 'PUMP-9999' AND posting_date >= :time_window")
+    v = validate_generated_sql(sql, _ALLOW, _SCOPE)  # scope asset is PUMP-4110
+    assert v["status"] != "PASSED"
+    assert "equipment_id" in v.get("missing_scope_predicates", [])
 
 
 def test_banned_keyword_hidden_in_string_literal_does_not_trip():

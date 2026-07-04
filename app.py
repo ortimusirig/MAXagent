@@ -74,9 +74,22 @@ def _current_actor() -> dict:
     Input("time-window", "value"),
     Input("review-type", "value"),
     Input("approval-audit", "data"),
+    State("chat-question", "data"),
 )
-def on_context(equipment_id, time_window, review_type, audit):
-    result = agent.run(equipment_id, actor=_current_actor(), time_window=time_window, review_type=review_type)
+def on_context(equipment_id, time_window, review_type, audit, chat_question):
+    actor = _current_actor()
+    # If a chat question was asked AND it resolves to the currently-selected asset, route through the
+    # LLM tool-calling orchestration (agent_loop). It narrates over the SAME deterministic decision;
+    # the gate/label never change. Falls back to the deterministic summary when no endpoint is bound.
+    question = None
+    if chat_question:
+        r = resolve_asset_from_text(chat_question, agent._fleet_index)
+        reid = r.get("equipment_id")
+        # Apply the question to the selected asset when it names no asset, or names this one.
+        if reid is None or reid == equipment_id:
+            question = chat_question
+    result = agent.run(equipment_id, actor=actor, time_window=time_window, review_type=review_type,
+                       question=question, thread_id=str(actor.get("user_id", "ui")))
     if result.get("error"):
         msg = html.Div(result["error"], style={"color": "#b42318"})
         blank = html.Div("-", style=MUTED)
@@ -99,29 +112,35 @@ def on_context(equipment_id, time_window, review_type, audit):
 @app.callback(
     Output("chat-echo", "children"),
     Output("asset-dropdown", "value", allow_duplicate=True),
+    Output("chat-question", "data"),
     Input("chat-send", "n_clicks"),
     Input("chat-input", "n_submit"),
     State("chat-input", "value"),
+    State("asset-dropdown", "value"),
     prevent_initial_call=True,
 )
-def on_chat(_clicks, _submit, text):
-    resolved = resolve_asset_from_text(text or "", agent._fleet_index)
+def on_chat(_clicks, _submit, text, current_asset):
+    text = (text or "").strip()
+    if not text:
+        return no_update, no_update, no_update
+    resolved = resolve_asset_from_text(text, agent._fleet_index)
     eid = resolved.get("equipment_id")
-    if not eid:
+    if eid:
         echo = html.Div([
             html.Div("You asked:", style={**MUTED, "fontSize": "11px"}),
-            html.Div(f'"{text or ""}"', style={"fontStyle": "italic", "fontSize": "13px"}),
-            html.Div("Could not resolve an in-scope asset from that. Pick an asset above, or name an asset id / class.",
-                     style={"color": "#b7791f", "fontSize": "12px", "marginTop": "4px"}),
+            html.Div(f'"{text}"', style={"fontStyle": "italic", "fontSize": "13px"}),
+            html.Div(f"Resolved to {eid} (matched on {resolved.get('matched_on')}).",
+                     style={"color": COLORS["oxy"], "fontSize": "12px", "marginTop": "4px", "fontWeight": 600}),
         ])
-        return echo, no_update
+        return echo, eid, text
+    # The question names no asset -> answer it for the currently-selected asset.
     echo = html.Div([
         html.Div("You asked:", style={**MUTED, "fontSize": "11px"}),
         html.Div(f'"{text}"', style={"fontStyle": "italic", "fontSize": "13px"}),
-        html.Div(f"Resolved to {eid} (matched on {resolved.get('matched_on')}).",
+        html.Div(f"Answering for the selected asset {current_asset}.",
                  style={"color": COLORS["oxy"], "fontSize": "12px", "marginTop": "4px", "fontWeight": 600}),
     ])
-    return echo, eid
+    return echo, no_update, text
 
 
 @app.callback(
@@ -151,14 +170,38 @@ def on_drilldown(active_cell, data):
     prevent_initial_call=True,
 )
 def on_approval(_a, _r, _j, comment, equipment_id, audit):
-    action = {"approve-btn": "APPROVE", "request-btn": "REQUEST_CHANGES", "reject-btn": "REJECT"}.get(ctx.triggered_id)
-    if not action:
+    # (button -> UI action, workflow transition requested)
+    mapping = {
+        "approve-btn": ("APPROVE", "ANALYST_REVIEWED"),
+        "request-btn": ("REQUEST_CHANGES", "REQUEST_CHANGES"),
+        "reject-btn": ("REJECT", "REJECTED"),
+    }
+    trig = mapping.get(ctx.triggered_id)
+    if not trig:
         return no_update
+    action, transition = trig
     actor = _current_actor()
+
+    # A click is NOT authorization. Route it through the deterministic approval tool, which verifies
+    # role membership (not a typed name), forbids self-approval, and returns the blocked reason.
+    from max_agent.tools import approval_workflow_state
+    asset = agent._fleet_index.get(equipment_id, {})
+    r = agent.run(equipment_id)
+    wf = approval_workflow_state(
+        package_id=f"PKG-{equipment_id}", current_state="DRAFT", requested_transition=transition,
+        actor=actor, gate_status=r.get("gate_status"),
+        readiness=asset.get("readiness", {}), approval_state=asset.get("approval_state", {}),
+        creator_user_id="analyst-09",
+    ).get("data", {})
+    authorized = bool(wf.get("transition_allowed"))
+
     from datetime import datetime, timezone
     entry = {
         "equipment_id": equipment_id, "action": action, "actor": actor.get("user_id"),
         "comment": (comment or "").strip(),
+        "outcome": "AUTHORIZED" if authorized else "DENIED",  # denied attempts are recorded too
+        "reason": None if authorized else (wf.get("blocked_transition_reason") or "role not verified"),
+        "role_verified": bool(wf.get("role_verified")),
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
     return (audit or []) + [entry]

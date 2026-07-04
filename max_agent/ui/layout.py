@@ -93,4 +93,5 @@ def build_layout(agent: MaxAgent) -> html.Div:
     return html.Div([
         header, filters, context_bar, body,
         dcc.Store(id="approval-audit", data=[]),
+        dcc.Store(id="chat-question"),
     ], style={"fontFamily": FONT, "background": COLORS["bg"], "color": COLORS["ink"], "minHeight": "100vh"})

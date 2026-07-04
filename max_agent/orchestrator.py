@@ -68,6 +68,20 @@ def _trace_entry(env: Dict[str, Any], keep: Optional[List[str]] = None) -> Dict[
     }
 
 
+# Phrases in a narration that would affirm/approve a change the gate did NOT pass. If any appears
+# while the gate is non-PASS, the narration is rejected (the LLM may explain, never override).
+_GATE_AFFIRM_PHRASES = (
+    "gate pass", "gate: pass", "gate is pass", "passes the gate", "approved", "go ahead",
+    "proceed with", "you can reduce", "you can retire", "safe to reduce", "safe to retire",
+    "can be reduced", "can be retired", "no approval needed", "cleared to", "green-light", "green light",
+)
+
+
+def _narration_contradicts_gate(text: str, gate_status: str) -> bool:
+    t = (text or "").lower()
+    return any(p in t for p in _GATE_AFFIRM_PHRASES)
+
+
 class MaxAgent:
     def __init__(self, bu_profile: Optional[Dict[str, Any]] = None, client: Optional[MaxDatabricksClient] = None) -> None:
         self.bu_profile = bu_profile or load_bu_profile("default_oxy")
@@ -76,14 +90,22 @@ class MaxAgent:
 
     # --- single-asset run --------------------------------------------------
     def run(self, equipment_id: str, actor: Optional[Dict[str, Any]] = None,
-            time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None) -> Dict[str, Any]:
+            time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None,
+            question: Optional[str] = None, thread_id: str = "default") -> Dict[str, Any]:
         asset = self._fleet_index.get(equipment_id)
         if asset is None:
             return {"error": f"Unknown asset: {equipment_id}", "known_assets": list(self._fleet_index)}
-        return self._run_asset(asset, actor=actor, time_window=time_window, review_type=review_type)
+        result = self._run_asset(asset, actor=actor, time_window=time_window, review_type=review_type)
+        result["orchestration_mode"] = "deterministic_only"
+        # A free-text question opts into the LLM tool-calling narration layer (chat path). The dropdown
+        # path passes no question and stays fully deterministic.
+        if question:
+            self._apply_agentic_narration(result, question, thread_id)
+        return result
 
     def answer(self, text: str, actor: Optional[Dict[str, Any]] = None,
-               time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None) -> Dict[str, Any]:
+               time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None,
+               thread_id: str = "default") -> Dict[str, Any]:
         """Free-text chat entry: resolve the asked-about asset deterministically, then run the pipeline."""
         from .intent import resolve_asset_from_text
         resolved = resolve_asset_from_text(text, self._fleet_index)
@@ -92,10 +114,37 @@ class MaxAgent:
             return {"error": "Could not resolve an in-scope asset from that question.",
                     "resolved_from_text": resolved, "user_question": text,
                     "known_assets": list(self._fleet_index)}
-        result = self.run(eid, actor=actor, time_window=time_window, review_type=review_type)
+        result = self.run(eid, actor=actor, time_window=time_window, review_type=review_type,
+                          question=text, thread_id=thread_id)
         result["resolved_from_text"] = resolved
         result["user_question"] = text or result.get("user_question")
         return result
+
+    def _apply_agentic_narration(self, result: Dict[str, Any], question: str, thread_id: str = "default") -> None:
+        """LLM tool-calling narration layer (finance-agent style, with a governance fence).
+
+        The deterministic result stays AUTHORITATIVE: this ONLY replaces the chat narration, and only
+        when a serving endpoint + the react stack are available. The gate, label, recommendation, and
+        package are never changed here. Any failure degrades silently to the deterministic summary.
+        """
+        if result.get("error"):
+            return
+        try:
+            from .agent_loop import run_agentic_answer
+            ans = run_agentic_answer(self, result, question, thread_id)
+        except Exception:
+            ans = None
+        if ans and ans.get("narration"):
+            gate = result.get("gate_status")
+            if gate and gate != "PASS" and _narration_contradicts_gate(ans["narration"], gate):
+                # A narration that affirms/approves a non-PASS gate is REJECTED (the LLM may explain a
+                # gate result but must never override it - 70/09). Keep the deterministic summary.
+                result["llm_plan"] = ans.get("plan", [])
+                result["orchestration_mode"] = "llm_narration_rejected"
+                return
+            result["chat_summary"] = ans["narration"]        # narration only
+            result["llm_plan"] = ans.get("plan", [])          # which tools the LLM chose (for the trace)
+            result["orchestration_mode"] = ans.get("mode", "llm_orchestrated")
 
     def _sql_executor(self):
         return self.client.sql_executor() or local_synthetic_executor(self._fleet_index)
@@ -196,12 +245,25 @@ class MaxAgent:
         rec = rec_env["data"]
         trace.append(_trace_entry(rec_env, ["recommendation", "do_not_optimize"]))
 
-        # 8. oxy_gate_check on the change under consideration
+        # 8. oxy_gate_check on the change under review (the scenario's proposed change).
         gate_env = oxy_gate_check(
             context, scope, profile, criticality, pm_governance, proposed, asset["readiness"],
             asset["risk"], asset["approval"], asset["approval_state"], asset["requested_action"],
         )
         trace.append(_trace_entry(gate_env, ["gate_status", "review_trigger", "required_approvers"]))
+
+        # 8b. Also gate MAX's OWN recommendation - 70/10: "every recommendation passes to
+        # oxy_gate_check." When MAX recommends something other than the change under review (e.g.
+        # DATA_REMEDIATION vs a raw retain), this surfaces the recommendation's own gate outcome so
+        # the UI never shows a recommendation MAX has not gate-checked.
+        rec_reco = rec["recommendation"]
+        rec_change = {"type": rec_reco.get("type"), "direction": rec_reco.get("direction")}
+        rec_gate_env = oxy_gate_check(
+            context, scope, profile, criticality, pm_governance, rec_change, asset["readiness"],
+            asset["risk"], asset["approval"], asset["approval_state"], asset["requested_action"],
+        )
+        trace.append(_trace_entry(rec_gate_env, ["gate_status", "review_trigger"]))
+        recommendation_diverges = rec_reco.get("type") != proposed.get("type")
 
         result.update({
             "classifier_label": clf["label"], "classifier_protected": clf.get("protected"),
@@ -209,9 +271,13 @@ class MaxAgent:
             "classifier_confidence": clf_env.get("confidence"),
             "data_readiness": rd_env["data"]["data_readiness"], "data_readiness_action": rd_env["data"].get("action"),
             "cost_view": rbj_env["data"]["cost_view"],
-            "recommendation_type": rec["recommendation"]["type"],
-            "recommendation_rationale": rec["recommendation"]["rationale"],
-            "recommendation_next_action": rec["recommendation"]["next_action"],
+            "change_under_review_type": proposed.get("type"),
+            "recommendation_type": rec_reco["type"],
+            "recommendation_rationale": rec_reco["rationale"],
+            "recommendation_next_action": rec_reco["next_action"],
+            "recommendation_gate_status": rec_gate_env["data"].get("gate_status"),
+            "recommendation_gate_reason": rec_gate_env.get("blocked_reason") or rec_gate_env["data"].get("review_trigger"),
+            "recommendation_diverges": recommendation_diverges,
             "do_not_optimize": rec["do_not_optimize"],
         })
         result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance, actor=actor))
@@ -308,6 +374,7 @@ class MaxAgent:
                 "gate_reason": r.get("gate_reason") or r.get("gate_review_trigger"),
                 "do_not_optimize": r.get("do_not_optimize"), "provenance": r.get("provenance"),
                 "data_readiness": asset["readiness"].get("data_readiness"),
+                "next_action": r.get("recommendation_next_action"),
             })
         return rows
 

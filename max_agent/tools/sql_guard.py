@@ -53,6 +53,24 @@ def _short_relation(name: str) -> str:
     return name.split(".")[-1].strip().lower()
 
 
+def _scope_bound(body_low: str, cols, value) -> bool:
+    """True only if one of `cols` is VALUE-BOUND to the locked scope in the SQL.
+
+    Accepts a server-side bind (`col = :param` / `col op :param`), an `IN (...)`, or an equality to
+    the actual scope value. It deliberately does NOT accept `col IS [NOT] NULL` or a bare column
+    mention - those pass the column name but leave the query unbound to this asset/window.
+    """
+    for c in cols:
+        c = re.escape(c.lower())
+        if re.search(rf"\b{c}\s*(?:>=|<=|=|>|<)\s*:", body_low):  # col op :param  (server-bound)
+            return True
+        if re.search(rf"\b{c}\s+in\s*\(", body_low):              # col IN ( ... )
+            return True
+        if value is not None and re.search(rf"\b{c}\s*=\s*'{re.escape(str(value).lower())}'", body_low):
+            return True                                            # col = 'the actual scope value'
+    return False
+
+
 def validate_generated_sql(
     sql: Optional[str],
     allowed_relations: List[str],
@@ -112,13 +130,16 @@ def validate_generated_sql(
     elif not refs:
         result["reasons"].append("NO_RELATION_FOUND")
 
-    # 4. scope filter present: each locked predicate's column must appear in the SQL
+    # 4. scope filter present AND VALUE-BOUND: each locked predicate must be bound to its scope value
+    # (a param bind, IN(...), or equality to the value) - not merely have its column name appear.
+    low = body.lower()
+    result["row_cap_present"] = bool(re.search(r"\blimit\s+\d+", low))
     if scope_predicates:
-        low = body.lower()
-        missing = [p for p in scope_predicates if not any(col in low for col in _SCOPE_COLUMNS.get(p, (p,)))]
+        missing = [p for p in scope_predicates
+                   if not _scope_bound(low, _SCOPE_COLUMNS.get(p, (p,)), scope.get(p))]
         result["scope_filter_present"] = not missing
         if missing:
-            result["reasons"].append("SCOPE_FILTER_MISSING")
+            result["reasons"].append("SCOPE_FILTER_NOT_BOUND")
             result["missing_scope_predicates"] = missing
     else:
         # No locked scope predicates at all -> unscoped query is not allowed.

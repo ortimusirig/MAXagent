@@ -16,6 +16,8 @@ env:
   #   valueFrom: "sql-warehouse"        # resource key configured in the Databricks App
   # - name: "GENIE_SPACE_ID"
   #   valueFrom: "genie-space"
+  # Bind a function-calling serving endpoint to turn ON LLM tool-calling orchestration (agent_loop.py).
+  # Without it, the chat path narrates deterministically (the sanctioned deterministic-only mode).
   # - name: "LLM_AGENT_ENDPOINT"
   #   value: "databricks-claude-sonnet-4-6"
   # - name: "MAX_CATALOG"

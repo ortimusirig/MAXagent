@@ -153,10 +153,19 @@ def render_decision(r: Dict[str, Any]) -> html.Div:
             html.Div(reason, style={"fontSize": "12px", "color": COLORS["muted"], "marginTop": "6px"}),
         ], style=CARD),
         html.Div([
-            html.Div("MAX recommendation", style=H2),
-            _kv("Type", r.get("recommendation_type")),
+            html.Div("Change under review vs MAX recommendation", style=H2),
+            _kv("Change under review (gated + packaged)", r.get("change_under_review_type")),
+            _kv("  gated as", r.get("gate_status")),
+            _kv("MAX recommendation", r.get("recommendation_type")),
+            _kv("  gated as", r.get("recommendation_gate_status")),
             _kv("Rationale", r.get("recommendation_rationale")),
             _kv("Next action", r.get("recommendation_next_action")),
+            html.Div(
+                "MAX's recommendation differs from the change under review: MAX advises the recommendation above, "
+                "and it is gate-checked separately. The SAP Package drafts the change under review.",
+                style={"background": "#fff4e5", "border": "1px solid #f0c987", "borderRadius": "8px",
+                       "padding": "8px", "fontSize": "12px", "color": "#8a5a00", "marginTop": "6px"},
+            ) if r.get("recommendation_diverges") else html.Div(),
         ], style=CARD),
         html.Div([
             html.Div("Approval workflow (draft-only, Wave 1)", style=H2),
@@ -259,6 +268,7 @@ def render_pm_health(health: Dict[str, Any]) -> html.Div:
 
     by_gate = metrics.get("by_gate_status", {})
     readiness_by_id = {r.get("equipment_id"): r.get("data_readiness") for r in rows}
+    next_by_id = {r.get("equipment_id"): r.get("next_action") for r in rows}
     queue = triage.get("queue") or [
         {"rank": i + 1, "equipment_id": r.get("equipment_id"), "criticality": r.get("criticality"),
          "label": r.get("label"), "gate_status": r.get("gate_status"), "reason": r.get("gate_reason")}
@@ -268,6 +278,7 @@ def render_pm_health(health: Dict[str, Any]) -> html.Div:
         "rank": q.get("rank"), "equipment_id": q.get("equipment_id"), "criticality": q.get("criticality"),
         "data_readiness": readiness_by_id.get(q.get("equipment_id"), "-"),
         "label": q.get("label"), "gate_status": q.get("gate_status"), "reason": q.get("reason"),
+        "next_action": next_by_id.get(q.get("equipment_id"), "-"),
     } for q in queue]
 
     style_cond = []
@@ -282,6 +293,7 @@ def render_pm_health(health: Dict[str, Any]) -> html.Div:
             {"name": "#", "id": "rank"}, {"name": "Asset", "id": "equipment_id"},
             {"name": "Crit", "id": "criticality"}, {"name": "Data readiness", "id": "data_readiness"},
             {"name": "Label", "id": "label"}, {"name": "Gate", "id": "gate_status"}, {"name": "Reason", "id": "reason"},
+            {"name": "Recommended next action", "id": "next_action"},
         ],
         data=table_data,
         cell_selectable=True, page_size=20,
@@ -373,8 +385,17 @@ def _audit_trail(audit: List[Dict[str, Any]], equipment_id: str) -> html.Div:
     entries = [a for a in (audit or []) if a.get("equipment_id") == equipment_id]
     if not entries:
         return html.Div("No governed actions recorded this session.", style=MUTED)
-    rows = [[e.get("timestamp"), e.get("actor"), badge(e.get("action"), {"REJECT": "#b42318", "REQUEST_CHANGES": "#b7791f"}.get(e.get("action"), "#1a7f37")), e.get("comment") or ""] for e in entries]
-    return _table(["When", "Actor", "Action", "Comment"], rows)
+    rows = []
+    for e in entries:
+        outcome = e.get("outcome", "AUTHORIZED")
+        outcome_cell = badge(outcome, "#1a7f37" if outcome == "AUTHORIZED" else "#b42318")
+        detail = e.get("reason") or e.get("comment") or ""
+        rows.append([
+            e.get("timestamp"), e.get("actor"),
+            badge(e.get("action"), {"REJECT": "#b42318", "REQUEST_CHANGES": "#b7791f"}.get(e.get("action"), "#0b5cab")),
+            outcome_cell, detail,
+        ])
+    return _table(["When", "Actor", "Action", "Outcome", "Reason / comment"], rows)
 
 
 def render_sap_package(r: Dict[str, Any], audit: List[Dict[str, Any]] = None) -> html.Div:
