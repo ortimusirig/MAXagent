@@ -99,7 +99,7 @@ def render_pills(r: Dict[str, Any]) -> html.Div:
     if not pills:
         return html.Div()
     return html.Div([
-        html.Div("Tools run (deterministic)", style={**MUTED, "marginBottom": "4px"}),
+        html.Div("Deterministic tools that decided this (the answer below is narrated)", style={**MUTED, "marginBottom": "4px"}),
         html.Div(pills),
     ], style={"marginBottom": "10px"})
 
