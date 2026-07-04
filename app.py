@@ -27,7 +27,7 @@ from max_agent.ui.artifacts import (
     render_sap_package,
     render_tool_trace,
 )
-from max_agent.ui.chat import render_chat, render_thinking, render_user_bubble
+from max_agent.ui.chat import render_chat, render_process, render_user_bubble
 from max_agent.ui.layout import build_layout
 from max_agent.ui.theme import MUTED
 
@@ -45,18 +45,33 @@ _PROG: dict = {}
 _PROG_LOCK = threading.Lock()
 
 
-def _prog_set(sid: str, current=None, status=None) -> None:
+def _prog_start(sid: str) -> None:
     with _PROG_LOCK:
-        p = _PROG.setdefault(sid, {"current": "thinking", "status": "idle"})
-        if current is not None:
-            p["current"] = current
-        if status is not None:
-            p["status"] = status
+        _PROG[sid] = {"steps": ["thinking"], "status": "running"}
+
+
+def _prog_step(sid: str, tool: str) -> None:
+    with _PROG_LOCK:
+        p = _PROG.setdefault(sid, {"steps": ["thinking"], "status": "running"})
+        p["status"] = "running"
+        if tool == "thinking":
+            return  # keep the current head (initial 'thinking' or the last tool)
+        if p["steps"] == ["thinking"]:
+            p["steps"] = []  # first real step replaces the initial 'thinking'
+        if not p["steps"] or p["steps"][-1] != tool:
+            p["steps"].append(tool)
+
+
+def _prog_done(sid: str) -> None:
+    with _PROG_LOCK:
+        if sid in _PROG:
+            _PROG[sid]["status"] = "done"
 
 
 def _prog_get(sid: str) -> dict:
     with _PROG_LOCK:
-        return dict(_PROG.get(sid, {"current": "thinking", "status": "idle"}))
+        p = _PROG.get(sid, {"steps": [], "status": "idle"})
+        return {"steps": list(p.get("steps", [])), "status": p.get("status", "idle")}
 
 
 def _current_actor() -> dict:
@@ -91,7 +106,7 @@ def poll_status(_n, session_id):
     p = _prog_get(session_id or "ui")
     if p.get("status") != "running":
         return ""
-    return render_thinking(p.get("current") or "thinking")
+    return render_process(p.get("steps") or ["thinking"])
 
 
 @app.callback(
@@ -124,15 +139,15 @@ def on_context(equipment_id, time_window, review_type, audit, chat_question, ses
 
     on_step = None
     if question:
-        _prog_set(sid, current="thinking", status="running")
+        _prog_start(sid)
 
-        def on_step(tool, _sid=sid):  # noqa: E306  (reports each step to the live indicator)
-            _prog_set(_sid, current=tool)
+        def on_step(tool, _sid=sid):  # noqa: E306  (appends each step to the live checklist)
+            _prog_step(_sid, tool)
 
     result = agent.run(equipment_id, actor=actor, time_window=time_window, review_type=review_type,
                        question=question, thread_id=sid, on_step=on_step)
     if question:
-        _prog_set(sid, status="done")
+        _prog_done(sid)
 
     if result.get("error"):
         blank = html.Div("-", style=MUTED)
@@ -168,7 +183,7 @@ def on_chat(_clicks, _submit, text, current_asset, session_id):
     if not text:
         return no_update, no_update, no_update
     # Show the "MAX is thinking" indicator immediately (before the ~20s run starts).
-    _prog_set(session_id or "ui", current="thinking", status="running")
+    _prog_start(session_id or "ui")
     resolved = resolve_asset_from_text(text, agent._fleet_index)
     eid = resolved.get("equipment_id")
     bubble = render_user_bubble(text)

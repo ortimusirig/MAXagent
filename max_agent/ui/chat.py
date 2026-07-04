@@ -30,12 +30,35 @@ def render_user_bubble(text: str) -> html.Div:
 
 
 def render_thinking(step: str) -> html.Div:
-    """The live indicator: a pulsing dot + 'MAX is <friendly step>...'."""
+    """A single live indicator: a pulsing dot + 'MAX is <friendly step>...'."""
     phrase = STEP_LABELS.get(step, step or "thinking")
     return html.Div([
         html.Span(className="max-thinking-dot"),
         html.Span(f"MAX is {phrase}...", className="max-thinking"),
     ], style={"display": "flex", "alignItems": "center", "padding": "6px 2px"})
+
+
+def render_process(steps) -> html.Div:
+    """The live checklist: completed steps get a green dot, the current step pulses.
+
+    steps is an ordered list of step keys (tool names + 'thinking'/'synthesizing'); the last entry is
+    the one MAX is on now.
+    """
+    steps = steps or []
+    if not steps:
+        return html.Div()
+    rows = []
+    last = len(steps) - 1
+    row_style = {"display": "flex", "alignItems": "center", "padding": "3px 0"}
+    for i, s in enumerate(steps):
+        phrase = STEP_LABELS.get(s, s)
+        if i == last:  # current step - pulsing
+            rows.append(html.Div([html.Span(className="max-thinking-dot"),
+                                  html.Span(f"MAX is {phrase}...", className="max-thinking")], style=row_style))
+        else:          # completed step - static green dot
+            rows.append(html.Div([html.Span(className="max-done-dot"),
+                                  html.Span(phrase, className="max-done")], style=row_style))
+    return html.Div(rows, style={"padding": "6px 2px"})
 
 
 def render_chat(result: Dict[str, Any]) -> html.Div:

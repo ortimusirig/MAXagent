@@ -22,6 +22,22 @@
   font-weight: 600;
 }
 
+/* a completed step in the live checklist (static green dot, no emoji) */
+.max-done-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1a7f37;
+  margin-right: 9px;
+  flex: 0 0 auto;
+}
+
+.max-done {
+  color: #5b6b7a;
+  font-size: 12px;
+}
+
 /* chat bubbles */
 .max-user-bubble {
   align-self: flex-end;
