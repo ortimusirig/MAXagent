@@ -43,8 +43,14 @@ HARD RULES:
   classify_effectiveness / recommend_change. Never state a different gate or label than the tools
   returned. Never invent an Oxy value (thresholds, MOC %, approvers, cost, mandatory tags) - if it is
   not in a tool result, say it is not available.
+- SHOW YOUR REASONING with the data: cite the specific evidence behind the recommendation (work-order
+  counts, failure-coding %, cost basis). Cite ONLY numbers you are given; never invent a rate or cost.
+- When the data is NOT enough to conclude (label Missing Evidence, or readiness RED), say so plainly
+  and list the SPECIFIC SAP data still needed - use the "DATA STILL NEEDED" facts provided; do not
+  invent other sources.
 - Wave 1 is draft-only: MAX never writes SAP. Do not imply an action was taken.
-- Answer in 3-6 sentences (headings/bold are fine; no emoji).
+- Answer as short bulleted findings under Overview / What the data shows / Recommendation (bold
+  headers are fine; no emoji).
 """
 
 
@@ -95,11 +101,24 @@ def run_agentic_answer(agent, result: Dict[str, Any], question: str,
         # ToolMessages back -> repeat until the model answers.
         llm = ChatDatabricks(endpoint=agent.client.llm_endpoint, max_tokens=800).bind_tools(tools)
 
+        # Give the model the evidence MAX already retrieved + the SAP data still needed, so its
+        # narration cites concrete numbers and names the real gaps (it stays free to call tools too).
+        ev_lines = (result.get("evidence_digest") or {}).get("lines") or []
+        ev_block = "\n".join(f"- {l}" for l in ev_lines)
+        needs = result.get("data_needs") or []
+        needs_block = "\n".join(f"- {n['need']} (SAP: {n['sap_source']})" for n in needs)
+        facts = ""
+        if ev_block:
+            facts += f"\n\nEVIDENCE ALREADY RETRIEVED (cite these exact numbers; do not invent others):\n{ev_block}"
+        if needs_block:
+            facts += f"\n\nDATA STILL NEEDED before MAX can score effectiveness (state these, do not invent others):\n{needs_block}"
+
         messages: List[Any] = [
             SystemMessage(content=AGENT_SYSTEM_PROMPT),
             HumanMessage(content=(
                 f"Asset {result.get('equipment_id')} ({result.get('asset_class')}), plant "
-                f"{result.get('plant')}, criticality {result.get('criticality_code')}. Question: {question}")),
+                f"{result.get('plant')}, criticality {result.get('criticality_code')}. Question: {question}"
+                f"{facts}")),
         ]
         narration, plan = "", []  # type: (str, List[str])
         for _ in range(REACT_MAX_STEPS):

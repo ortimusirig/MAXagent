@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import load_bu_profile
 from .databricks_client import MaxDatabricksClient
+from .evidence import build_evidence_digest, data_needs
 from .prompts import NARRATION_SYSTEM, deterministic_summary, narration_prompt
 from .sql_templates import local_synthetic_executor
 from .synthetic_data import fleet_index, synthetic_fleet
@@ -224,6 +225,7 @@ class MaxAgent:
             result["recommendation_rationale"] = f"Asset held: {scope.get('blocked_reason')}."
             result["do_not_optimize"] = False
             result["tool_trace"] = trace
+            self._attach_evidence(result)
             result["chat_summary"] = self._summary(result) if narrate else deterministic_summary(result)
             return result
 
@@ -280,6 +282,10 @@ class MaxAgent:
             "classifier_label": clf["label"], "classifier_protected": clf.get("protected"),
             "protection_basis": clf.get("protection_basis"), "thresholds_status": clf.get("thresholds_status"),
             "classifier_confidence": clf_env.get("confidence"),
+            # Promote the classifier's reasoning (today only in the tool trace) so the chat can explain WHY.
+            "classifier_reason": clf.get("missing_evidence_reason") or clf.get("needs_improvement_reason"),
+            "dimension_results": clf.get("dimension_results"),
+            "missing_domains": rd_env["data"].get("missing_domains"),
             "data_readiness": rd_env["data"]["data_readiness"], "data_readiness_action": rd_env["data"].get("action"),
             "cost_view": rbj_env["data"]["cost_view"],
             "change_under_review_type": proposed.get("type"),
@@ -295,6 +301,7 @@ class MaxAgent:
                                         rec_reco=rec_reco, rec_gate_env=rec_gate_env))
         self._run_extras(asset, context, scope, criticality, trace, result)
         result["tool_trace"] = trace
+        self._attach_evidence(result)
         result["chat_summary"] = self._summary(result) if narrate else deterministic_summary(result)
         return result
 
@@ -387,6 +394,12 @@ class MaxAgent:
             "package": pkg_env["data"], "package_gate_status": pkg_gate_status,
             "workflow": wf_env["data"],
         }
+
+    def _attach_evidence(self, result: Dict[str, Any]) -> None:
+        """Attach the evidence digest ('what the data shows') + the SAP data-needs list so every
+        summary path (deterministic, LLM narration, agentic) can cite them. Presentation only."""
+        result["evidence_digest"] = build_evidence_digest(result)
+        result["data_needs"] = data_needs(result)
 
     def _summary(self, result: Dict[str, Any]) -> str:
         narrated = self.client.llm_complete(narration_prompt(result), NARRATION_SYSTEM)
