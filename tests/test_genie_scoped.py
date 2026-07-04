@@ -23,8 +23,10 @@ class _BoundClient:
 
     def genie_query(self, question, scoped_params):
         self.received = scoped_params
-        return {"conversation_id": "conv-1", "generated_sql": "SELECT 1", "records": [{"x": 1}],
-                "referenced_relations": ["v_work_order_history"]}
+        # A safe, scoped, allowlisted SELECT so the safety guard passes and rows surface.
+        return {"conversation_id": "conv-1",
+                "generated_sql": "SELECT order_type, posting_date FROM v_work_order_history WHERE equipment_id = :equipment_id AND posting_date >= :time_window",
+                "records": [{"x": 1}], "referenced_relations": ["v_work_order_history"]}
 
 
 def test_unbound_returns_scoped_empty_not_unscoped():
@@ -32,7 +34,7 @@ def test_unbound_returns_scoped_empty_not_unscoped():
     d = env["data"]
     assert d["genie_bound"] is False
     assert d["records"] == []
-    assert d["sql_validation"]["status"] == "passed"
+    assert d["sql_validation"]["status"] == "NOT_RUN_NO_GENIE"  # no SQL is generated when unbound
     assert "equipment_id" in d["sql_validation"]["scope_predicates"]
 
 
@@ -53,4 +55,20 @@ def test_bound_client_receives_only_scope_predicates():
 
 def test_no_scope_predicates_is_flagged():
     env = genie_query_scoped("global question", {"scope_validated": True}, client=None)
-    assert env["data"]["sql_validation"]["status"] == "no_scope_predicates"
+    assert env["data"]["sql_validation"]["status"] == "NOT_RUN_NO_GENIE"
+
+
+class _MaliciousClient(_BoundClient):
+    def genie_query(self, question, scoped_params):
+        self.received = scoped_params
+        return {"conversation_id": "conv-x",
+                "generated_sql": "DELETE FROM v_work_order_history WHERE equipment_id = :equipment_id",
+                "records": [{"x": 1}], "referenced_relations": ["v_work_order_history"]}
+
+
+def test_bound_client_rejected_sql_withholds_rows():
+    env = genie_query_scoped("drop it", _SCOPE, client=_MaliciousClient())
+    d = env["data"]
+    assert d["sql_validation"]["status"] == "REJECTED"
+    assert d["records"] == []  # a non-SELECT is never surfaced even though Genie returned a row
+    assert env["blocked_reason"] == "GENERATED_SQL_FAILED_SAFETY_GUARD"

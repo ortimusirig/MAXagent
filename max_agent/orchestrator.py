@@ -75,16 +75,33 @@ class MaxAgent:
         self._fleet_index = fleet_index()
 
     # --- single-asset run --------------------------------------------------
-    def run(self, equipment_id: str) -> Dict[str, Any]:
+    def run(self, equipment_id: str, actor: Optional[Dict[str, Any]] = None,
+            time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None) -> Dict[str, Any]:
         asset = self._fleet_index.get(equipment_id)
         if asset is None:
             return {"error": f"Unknown asset: {equipment_id}", "known_assets": list(self._fleet_index)}
-        return self._run_asset(asset)
+        return self._run_asset(asset, actor=actor, time_window=time_window, review_type=review_type)
+
+    def answer(self, text: str, actor: Optional[Dict[str, Any]] = None,
+               time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None) -> Dict[str, Any]:
+        """Free-text chat entry: resolve the asked-about asset deterministically, then run the pipeline."""
+        from .intent import resolve_asset_from_text
+        resolved = resolve_asset_from_text(text, self._fleet_index)
+        eid = resolved.get("equipment_id")
+        if not eid:
+            return {"error": "Could not resolve an in-scope asset from that question.",
+                    "resolved_from_text": resolved, "user_question": text,
+                    "known_assets": list(self._fleet_index)}
+        result = self.run(eid, actor=actor, time_window=time_window, review_type=review_type)
+        result["resolved_from_text"] = resolved
+        result["user_question"] = text or result.get("user_question")
+        return result
 
     def _sql_executor(self):
         return self.client.sql_executor() or local_synthetic_executor(self._fleet_index)
 
-    def _run_asset(self, asset: Dict[str, Any]) -> Dict[str, Any]:
+    def _run_asset(self, asset: Dict[str, Any], actor: Optional[Dict[str, Any]] = None,
+                   time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None) -> Dict[str, Any]:
         trace: List[Dict[str, Any]] = []
         profile = self.bu_profile
 
@@ -92,7 +109,7 @@ class MaxAgent:
         ctx_env = resolve_context(
             equipment_id=asset["equipment_id"], functional_location_id=asset["functional_location_id"],
             plant=asset["plant"], business_unit=asset["business_unit"], bu_profile_id=profile["profile_id"],
-            asset_class=asset["asset_class"], time_window="LAST_24_MONTHS",
+            asset_class=asset["asset_class"], time_window=time_window,
             pm_strategy_type=asset["current_strategy"]["strategy_type"], pm_id=asset["pm_id"],
         )
         context = ctx_env["data"]["context"]
@@ -108,17 +125,25 @@ class MaxAgent:
         pm_governance = asset["pm_governance"]
 
         # 3. run_scoped_sql (evidence)
-        sql_scope = {"equipment_id": asset["equipment_id"], "time_window": "LAST_24_MONTHS", "scope_validated": scope.get("scope_validated", True)}
+        sql_scope = {"equipment_id": asset["equipment_id"], "time_window": time_window, "scope_validated": scope.get("scope_validated", True)}
         evidence = {}
         executor = self._sql_executor()
         for tmpl in ("work_order_history", "cost_summary", "notification_findings"):
-            sql_env = run_scoped_sql(tmpl, sql_scope, {"equipment_id": asset["equipment_id"], "time_window": "LAST_24_MONTHS"}, executor=executor)
+            sql_env = run_scoped_sql(tmpl, sql_scope, {"equipment_id": asset["equipment_id"], "time_window": time_window}, executor=executor)
             evidence[tmpl] = sql_env["data"].get("records", [])
             trace.append(_trace_entry(sql_env, ["template_name", "row_count", "executor_bound"]))
 
         result: Dict[str, Any] = {
             "equipment_id": asset["equipment_id"], "asset_class": asset["asset_class"], "plant": asset["plant"],
-            "pm_id": asset["pm_id"], "user_question": asset["user_question"], "provenance": provenance,
+            "business_unit": asset["business_unit"], "pm_id": asset["pm_id"],
+            "user_question": asset["user_question"], "provenance": provenance,
+            "criticality_code": criticality.get("code"), "criticality_label": criticality.get("label"),
+            "bu_profile_id": profile.get("profile_id"), "time_window": time_window,
+            "review_type": review_type or "PM effectiveness and strategy review",
+            "actor": actor or {"user_id": "local", "roles": []},
+            "operated_status": asset["master_data"].get("operated_status"),
+            "exemption_status": asset["master_data"].get("exemption_status"),
+            "data_readiness_rag": asset["readiness"].get("data_readiness"),
             "scope": scope, "evidence": evidence, "expected_gate_status": asset.get("expected_gate_status"),
             "databricks_mode": self.client.mode(),
         }
@@ -133,7 +158,7 @@ class MaxAgent:
                 asset["risk"], asset["approval"], asset["approval_state"], asset["requested_action"],
             )
             trace.append(_trace_entry(gate_env, ["gate_status", "review_trigger", "required_approvers"]))
-            result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance))
+            result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance, actor=actor))
             result["classifier_label"] = "Not classified (out of analysis scope)"
             result["recommendation_type"] = "NONE"
             result["recommendation_rationale"] = f"Asset held: {scope.get('blocked_reason')}."
@@ -181,13 +206,15 @@ class MaxAgent:
         result.update({
             "classifier_label": clf["label"], "classifier_protected": clf.get("protected"),
             "protection_basis": clf.get("protection_basis"), "thresholds_status": clf.get("thresholds_status"),
-            "data_readiness": rd_env["data"]["data_readiness"], "cost_view": rbj_env["data"]["cost_view"],
+            "classifier_confidence": clf_env.get("confidence"),
+            "data_readiness": rd_env["data"]["data_readiness"], "data_readiness_action": rd_env["data"].get("action"),
+            "cost_view": rbj_env["data"]["cost_view"],
             "recommendation_type": rec["recommendation"]["type"],
             "recommendation_rationale": rec["recommendation"]["rationale"],
             "recommendation_next_action": rec["recommendation"]["next_action"],
             "do_not_optimize": rec["do_not_optimize"],
         })
-        result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance))
+        result.update(self._finish_gate(gate_env, proposed, asset, criticality, provenance, actor=actor))
         self._run_extras(asset, context, scope, criticality, trace, result)
         result["tool_trace"] = trace
         result["chat_summary"] = self._summary(result)
@@ -201,7 +228,8 @@ class MaxAgent:
         # genie_query_scoped (scoped; local returns empty, never runs unscoped)
         genie_env = genie_query_scoped(
             asset["user_question"],
-            {"equipment_id": asset["equipment_id"], "time_window": "LAST_24_MONTHS", "scope_validated": scope.get("scope_validated", True)},
+            {"equipment_id": asset["equipment_id"], "time_window": result.get("time_window", "LAST_24_MONTHS"),
+             "scope_validated": scope.get("scope_validated", True)},
             client=self.client,
         )
         trace.append(_trace_entry(genie_env, ["genie_bound", "row_count", "referenced_relations"]))
@@ -235,8 +263,11 @@ class MaxAgent:
             trace.append(_trace_entry(tm_env, ["decision", "reason"]))
             result["trial"] = tm_env["data"]
 
-    def _finish_gate(self, gate_env, proposed, asset, criticality, provenance) -> Dict[str, Any]:
+    def _finish_gate(self, gate_env, proposed, asset, criticality, provenance, actor=None) -> Dict[str, Any]:
         gate = gate_env["data"]
+        # The acting user comes from Databricks authentication when available (70/06); a self-typed
+        # name is never accepted as authorization. Falls back to the planner stub in local mode.
+        actor = actor or {"user_id": "planner-01", "roles": ["planner_scheduler"]}
         # 9. draft_sap_change_package
         pkg_env = draft_sap_change_package(
             recommendation=proposed, gate_result=gate_env, evidence=[], criticality=criticality,
@@ -248,9 +279,9 @@ class MaxAgent:
         wf_env = approval_workflow_state(
             package_id=f"PKG-{asset['equipment_id']}", current_state="DRAFT",
             requested_transition="ANALYST_REVIEWED",
-            actor={"user_id": "planner-01", "roles": ["planner_scheduler"]},
+            actor=actor,
             gate_status=gate.get("gate_status"), readiness=asset["readiness"],
-            approval_state=asset["approval_state"], creator_user_id="analyst-09",
+            approval_state=asset["approval_state"], creator_user_id=actor.get("user_id", "analyst-09"),
         )
         return {
             "gate_status": gate.get("gate_status"), "gate_reason": gate_env.get("blocked_reason"),
@@ -276,6 +307,7 @@ class MaxAgent:
                 "label": r.get("classifier_label"), "gate_status": r.get("gate_status"),
                 "gate_reason": r.get("gate_reason") or r.get("gate_review_trigger"),
                 "do_not_optimize": r.get("do_not_optimize"), "provenance": r.get("provenance"),
+                "data_readiness": asset["readiness"].get("data_readiness"),
             })
         return rows
 

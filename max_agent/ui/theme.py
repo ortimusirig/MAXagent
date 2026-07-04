@@ -18,6 +18,15 @@ STATUS_COLORS = {
     "DRAFT_ONLY": "#0b5cab",
 }
 
+# Data-readiness RAG -> color (RED / AMBER(YELLOW) / GREEN + not-required).
+RAG_COLORS = {
+    "GREEN": "#1a7f37",
+    "YELLOW": "#b7791f",
+    "AMBER": "#b7791f",
+    "RED": "#b42318",
+    "NOT_REQUIRED": "#5b6b7a",
+}
+
 # Classifier label -> color.
 LABEL_COLORS = {
     "Governance Review Required": "#6b46c1",

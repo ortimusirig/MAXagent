@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from ..schemas import STATUS_SUCCESS, STATUS_WARNING, tool_envelope
+from .sql_guard import validate_generated_sql
 
 
 def run_scoped_sql(
@@ -94,7 +95,6 @@ def genie_query_scoped(
     scope = scope or {}
     scope_predicates = [k for k in ("equipment_id", "functional_location_id", "plant", "time_window") if scope.get(k)]
     relations = allowed_relations or ["v_pm_plan_current", "v_work_order_history", "v_notification_history"]
-    validation = {"status": "passed" if scope_predicates else "no_scope_predicates", "scope_predicates": scope_predicates}
 
     bound = bool(client) and getattr(client, "genie_bound", lambda: False)()
     if not bound:
@@ -102,20 +102,42 @@ def genie_query_scoped(
             tool="genie_query_scoped", status=STATUS_WARNING,
             summary="Genie not bound; returning a scoped empty result (no unscoped query is run).",
             data={"conversation_id": None, "generated_sql": None, "referenced_relations": relations,
-                  "sql_validation": validation, "row_count": 0, "records": [], "genie_bound": False},
+                  "sql_validation": {"status": "NOT_RUN_NO_GENIE", "scope_predicates": scope_predicates},
+                  "row_count": 0, "records": [], "genie_bound": False},
             params_used={"question": question, **{k: scope.get(k) for k in scope_predicates}},
             confidence="low", scope_validated=bool(scope.get("scope_validated", True)),
         )
 
-    # Bound path: delegate to the client (Genie), still enforcing scope predicates.
+    # Bound path: delegate to the client (Genie), then GUARD the generated SQL before surfacing rows.
     result = client.genie_query(question, {k: scope.get(k) for k in scope_predicates}) or {}
-    records = result.get("records", [])
+    generated_sql = result.get("generated_sql")
+    validation = validate_generated_sql(generated_sql, relations, scope)
+
+    # Fail closed: a REJECTED query never surfaces rows, regardless of what Genie returned.
+    if validation["status"] == "REJECTED":
+        return tool_envelope(
+            tool="genie_query_scoped", status=STATUS_WARNING,
+            summary=f"Genie SQL rejected by safety guard ({', '.join(validation['reasons'])}); no rows surfaced.",
+            data={"conversation_id": result.get("conversation_id"), "generated_sql": generated_sql,
+                  "referenced_relations": validation["referenced_relations"] or result.get("referenced_relations", relations),
+                  "sql_validation": validation, "row_count": 0, "records": [], "genie_bound": True},
+            params_used={"question": question, **{k: scope.get(k) for k in scope_predicates}},
+            confidence="low", scope_validated=bool(scope.get("scope_validated", True)),
+            blocked_reason="GENERATED_SQL_FAILED_SAFETY_GUARD",
+        )
+
+    records = result.get("records", []) if validation["status"] == "PASSED" else []
+    status = STATUS_SUCCESS if validation["status"] == "PASSED" else STATUS_WARNING
+    summary = (
+        f"Genie returned {len(records)} scoped row(s)." if validation["status"] == "PASSED"
+        else f"Genie SQL readable but not fully scoped/allowlisted ({', '.join(validation['reasons'])}); rows withheld."
+    )
     return tool_envelope(
-        tool="genie_query_scoped", status=STATUS_SUCCESS,
-        summary=f"Genie returned {len(records)} scoped row(s).",
-        data={"conversation_id": result.get("conversation_id"), "generated_sql": result.get("generated_sql"),
-              "referenced_relations": result.get("referenced_relations", relations),
+        tool="genie_query_scoped", status=status, summary=summary,
+        data={"conversation_id": result.get("conversation_id"), "generated_sql": generated_sql,
+              "referenced_relations": validation["referenced_relations"] or result.get("referenced_relations", relations),
               "sql_validation": validation, "row_count": len(records), "records": records, "genie_bound": True},
         params_used={"question": question, **{k: scope.get(k) for k in scope_predicates}},
-        confidence="medium", scope_validated=bool(scope.get("scope_validated", True)),
+        confidence="medium" if validation["status"] == "PASSED" else "low",
+        scope_validated=bool(scope.get("scope_validated", True)),
     )
