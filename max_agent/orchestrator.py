@@ -97,9 +97,11 @@ class MaxAgent:
             return {"error": f"Unknown asset: {equipment_id}", "known_assets": list(self._fleet_index)}
         result = self._run_asset(asset, actor=actor, time_window=time_window, review_type=review_type)
         result["orchestration_mode"] = "deterministic_only"
-        # A free-text question opts into the LLM tool-calling narration layer (chat path). The dropdown
-        # path passes no question and stays fully deterministic.
+        # A free-text question tailors the (deterministic) answer to what was asked, then opts into the
+        # LLM tool-calling narration layer. The dropdown path passes no question and stays as-is.
         if question:
+            result["user_question"] = question
+            result["chat_summary"] = self._summary(result)  # recompute, now question-aware
             self._apply_agentic_narration(result, question, thread_id)
         return result
 
