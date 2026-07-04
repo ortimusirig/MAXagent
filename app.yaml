@@ -11,6 +11,12 @@ env:
   - name: "MAX_ENV"
     value: "dev"
 
+  # LLM narration + tool-calling orchestration ON: MAX explains the deterministic result in prose
+  # (governed - it may explain, never contradict the gate or invent an Oxy value). Data stays
+  # synthetic until SQL/Genie are also bound.
+  - name: "LLM_AGENT_ENDPOINT"
+    value: "databricks-claude-sonnet-4-6"
+
   # --- Optional Databricks bindings (uncomment + configure to use real data) ---
   # - name: "SQL_WAREHOUSE_ID"
   #   valueFrom: "sql-warehouse"        # resource key configured in the Databricks App

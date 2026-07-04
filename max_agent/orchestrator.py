@@ -95,14 +95,20 @@ class MaxAgent:
         asset = self._fleet_index.get(equipment_id)
         if asset is None:
             return {"error": f"Unknown asset: {equipment_id}", "known_assets": list(self._fleet_index)}
-        result = self._run_asset(asset, actor=actor, time_window=time_window, review_type=review_type)
+        # Dropdown browsing stays fast and deterministic; the LLM narration happens only when the user
+        # asks a question (clicks Ask), so selecting assets never waits on an LLM call.
+        result = self._run_asset(asset, actor=actor, time_window=time_window, review_type=review_type,
+                                 narrate=False)
         result["orchestration_mode"] = "deterministic_only"
-        # A free-text question tailors the (deterministic) answer to what was asked, then opts into the
-        # LLM tool-calling narration layer. The dropdown path passes no question and stays as-is.
         if question:
             result["user_question"] = question
-            result["chat_summary"] = self._summary(result)  # recompute, now question-aware
+            # Optional LLM tool-calling orchestration (react agent) first; it may set the mode.
             self._apply_agentic_narration(result, question, thread_id)
+            if result["orchestration_mode"] == "deterministic_only":
+                # Default answer: one question-aware LLM narration (or deterministic when unbound).
+                result["chat_summary"] = self._summary(result)
+                if self.client.llm_bound():
+                    result["orchestration_mode"] = "llm_narrated"
         return result
 
     def answer(self, text: str, actor: Optional[Dict[str, Any]] = None,
@@ -152,7 +158,8 @@ class MaxAgent:
         return self.client.sql_executor() or local_synthetic_executor(self._fleet_index)
 
     def _run_asset(self, asset: Dict[str, Any], actor: Optional[Dict[str, Any]] = None,
-                   time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None) -> Dict[str, Any]:
+                   time_window: str = "LAST_24_MONTHS", review_type: Optional[str] = None,
+                   narrate: bool = True) -> Dict[str, Any]:
         trace: List[Dict[str, Any]] = []
         profile = self.bu_profile
 
@@ -215,7 +222,7 @@ class MaxAgent:
             result["recommendation_rationale"] = f"Asset held: {scope.get('blocked_reason')}."
             result["do_not_optimize"] = False
             result["tool_trace"] = trace
-            result["chat_summary"] = self._summary(result)
+            result["chat_summary"] = self._summary(result) if narrate else deterministic_summary(result)
             return result
 
         # 4. pm_effectiveness_classifier
@@ -286,7 +293,7 @@ class MaxAgent:
                                         rec_reco=rec_reco, rec_gate_env=rec_gate_env))
         self._run_extras(asset, context, scope, criticality, trace, result)
         result["tool_trace"] = trace
-        result["chat_summary"] = self._summary(result)
+        result["chat_summary"] = self._summary(result) if narrate else deterministic_summary(result)
         return result
 
     def _run_extras(self, asset, context, scope, criticality, trace, result) -> None:
@@ -387,7 +394,7 @@ class MaxAgent:
     def portfolio(self) -> List[Dict[str, Any]]:
         rows = []
         for asset in synthetic_fleet():
-            r = self._run_asset(asset)
+            r = self._run_asset(asset, narrate=False)  # portfolio rows never use chat_summary; skip the LLM
             rows.append({
                 "equipment_id": r["equipment_id"], "asset_class": r["asset_class"],
                 "criticality": asset["master_data"]["criticality"]["code"],

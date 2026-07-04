@@ -38,14 +38,19 @@ class MaxDatabricksClient:
         except Exception:
             return False
 
+    def _workspace_reachable(self) -> bool:
+        # Inside a Databricks App the WorkspaceClient auto-authenticates via the app service principal
+        # (no DATABRICKS_HOST needed); locally the SDK is absent, so this is False and we stay synthetic.
+        return self._sdk_available() and (bool(self.host) or bool(os.environ.get("DATABRICKS_APP_PORT")))
+
     def sql_bound(self) -> bool:
-        return bool(self.host and self.warehouse_id and self._sdk_available())
+        return bool(self.warehouse_id and self._workspace_reachable())
 
     def genie_bound(self) -> bool:
-        return bool(self.host and self.genie_space_id and self._sdk_available())
+        return bool(self.genie_space_id and self._workspace_reachable())
 
     def llm_bound(self) -> bool:
-        return bool(self.host and self.llm_endpoint and self._sdk_available())
+        return bool(self.llm_endpoint and self._workspace_reachable())
 
     def mode(self) -> str:
         return "databricks" if (self.sql_bound() or self.llm_bound()) else "local_synthetic"
@@ -126,11 +131,12 @@ class MaxDatabricksClient:
             return None
         try:
             from databricks.sdk import WorkspaceClient  # lazy
+            from databricks.sdk.service.serving import ChatMessage, ChatMessageRole  # lazy
             ws = WorkspaceClient()
             messages = []
             if system:
-                messages.append({"role": "system", "content": system})
-            messages.append({"role": "user", "content": prompt})
+                messages.append(ChatMessage(role=ChatMessageRole.SYSTEM, content=system))
+            messages.append(ChatMessage(role=ChatMessageRole.USER, content=prompt))
             resp = ws.serving_endpoints.query(name=self.llm_endpoint, messages=messages, max_tokens=400)
             choices = getattr(resp, "choices", None) or []
             if choices:

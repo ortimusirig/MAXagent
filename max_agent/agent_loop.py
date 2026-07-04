@@ -18,9 +18,10 @@ None and the orchestrator keeps the deterministic summary (the sanctioned determ
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
-REACT_MAX_STEPS = 8
+REACT_MAX_STEPS = 6
 
 AGENT_SYSTEM_PROMPT = """You are MAX, a governed preventive-maintenance strategy copilot for Oxy.
 
@@ -44,12 +45,14 @@ HARD RULES:
 
 
 def agentic_available(client) -> bool:
-    """True only if a serving endpoint is bound AND the react stack is importable.
+    """True only if the multi-step react agent is explicitly enabled AND usable.
 
-    The endpoint check comes FIRST so deterministic-only mode (no endpoint) never pays the cost of
-    importing the LangGraph/LangChain stack - the heavy import only happens when the LLM path is
-    actually configured.
+    The react tool-calling loop is OPT-IN (env MAX_AGENTIC_ORCHESTRATION) because it makes several
+    LLM calls per turn; by default the chat path uses a single question-aware LLM narration, which is
+    fast and already conversational. Enable the flag to turn on LLM-selected tool orchestration.
     """
+    if not os.environ.get("MAX_AGENTIC_ORCHESTRATION"):
+        return False
     if not bool(getattr(client, "llm_bound", lambda: False)()):
         return False
     try:
