@@ -74,15 +74,15 @@ def _current_actor() -> dict:
     Input("time-window", "value"),
     Input("review-type", "value"),
     Input("approval-audit", "data"),
-    State("chat-question", "data"),
+    Input("chat-question", "data"),
 )
 def on_context(equipment_id, time_window, review_type, audit, chat_question):
     actor = _current_actor()
-    # If a chat question was asked AND it resolves to the currently-selected asset, route through the
-    # LLM tool-calling orchestration (agent_loop). It narrates over the SAME deterministic decision;
-    # the gate/label never change. Falls back to the deterministic summary when no endpoint is bound.
+    # Only narrate (LLM) when the ASK itself triggered this render - so browsing the dropdown or
+    # changing filters stays fast/deterministic and never re-applies a stale question.
+    triggered = {t["prop_id"].split(".")[0] for t in (ctx.triggered or [])}
     question = None
-    if chat_question:
+    if "chat-question" in triggered and chat_question:
         r = resolve_asset_from_text(chat_question, agent._fleet_index)
         reid = r.get("equipment_id")
         # Apply the question to the selected asset when it names no asset, or names this one.
