@@ -28,9 +28,9 @@ from max_agent.ui.artifacts import (
 )
 from max_agent.ui.chat import render_chat, render_process, render_user_bubble
 from max_agent.ui.command_center import (
-    FILTER_BY_PRIORITY,
     PRIORITY_KEYS,
     _PRIORITY,
+    priority_match,
     priority_tile_style,
     render_pm_preview,
 )
@@ -262,19 +262,20 @@ def on_queue_click(active_cell, data):
     Input("cc-preview-close", "n_clicks"),
     prevent_initial_call=True,
 )
-def on_preview_action(_ask, _studio, _close):
+def on_preview_action(ask, studio, close):
     trig = ctx.triggered_id
-    if trig == "cc-ask-btn":
+    # Guard on n_clicks so the dynamically-created buttons don't fire on creation (n_clicks=0).
+    if trig == "cc-ask-btn" and ask:
         return "ask", no_update       # both carry the already-set asset scope forward
-    if trig == "cc-studio-btn":
+    if trig == "cc-studio-btn" and studio:
         return "studio", no_update
-    if trig == "cc-preview-close":
+    if trig == "cc-preview-close" and close:
         return no_update, html.Div()  # clear the slide-over
     return no_update, no_update
 
 
 @app.callback(
-    Output("pmhealth-table", "filter_query"),
+    Output("pmhealth-table", "data"),
     Output("cc-active-priority", "data"),
     Output("cc-prio-blocked", "style"),
     Output("cc-prio-review", "style"),
@@ -287,15 +288,16 @@ def on_preview_action(_ask, _studio, _close):
     Input("cc-prio-missing", "n_clicks"),
     Input("cc-prio-readiness", "n_clicks"),
     State("cc-active-priority", "data"),
+    State("cc-all-rows", "data"),
     prevent_initial_call=True,
 )
 def on_priority(*args):
-    active = args[-1]
+    all_rows, active = args[-1], args[-2]
     key = (ctx.triggered_id or "").replace("cc-prio-", "")
     new_active = None if active == key else key  # clicking the active tile clears the filter
-    fq = "" if new_active is None else FILTER_BY_PRIORITY.get(key, "")
+    data = all_rows if new_active is None else [d for d in (all_rows or []) if priority_match(d, key)]
     styles = tuple(priority_tile_style(k == new_active, _PRIORITY[k][2]) for k in PRIORITY_KEYS)
-    return (fq, new_active) + styles
+    return (data, new_active) + styles
 
 
 @app.callback(

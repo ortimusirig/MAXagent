@@ -1,10 +1,10 @@
 """Command Center: queue-first PM triage landing (per 50 - UI and Experience).
 
-Layout: a left 'Review Priorities' filter rail (clickable tiles that filter the queue) + a center
-PM Health queue (per-column filters under the headers) + a right conditional PM-Preview slide-over.
+Layout: a left 'Review Priorities' filter rail (clickable tiles) + a center PM Health queue (per-column
+filters under the headers, case-insensitive) + a right conditional PM-Preview slide-over.
 
 Interactions (wired in app.py):
-- Priority tile click  -> filters the queue (sets the table filter_query).
+- Priority tile click  -> filters the queue DATA (subset), native column filters run on top.
 - Row body / chevron   -> opens the PM-Preview slide-over (stays in Command Center).
 - Asset / PM name click -> opens Work Strategy Studio directly for that PM.
 
@@ -17,9 +17,9 @@ from typing import Any, Dict, List
 
 from dash import dash_table, dcc, html
 
-from .theme import COLORS, MUTED, RAG_COLORS, STATUS_COLORS
+from .theme import COLORS, MUTED, STATUS_COLORS
 
-# Priority tiles: key -> (label, description, accent colour, table filter_query).
+# Priority tiles: key -> (label, description, accent colour).
 PRIORITY_KEYS = ["blocked", "review", "draft", "missing", "readiness"]
 _PRIORITY = {
     "blocked": ("Blocked", "Require immediate attention", STATUS_COLORS.get("BLOCKED", "#c1261b")),
@@ -28,13 +28,32 @@ _PRIORITY = {
     "missing": ("Missing Evidence", "Evidence required", "#6f42c1"),
     "readiness": ("Data Readiness", "Fleet average readiness", "#15803d"),
 }
-FILTER_BY_PRIORITY = {
-    "blocked": '{gate_status} = "BLOCKED"',
-    "review": '{gate_status} = "REVIEW_REQUIRED"',
-    "draft": '{gate_status} = "DRAFT_ONLY"',
-    "missing": '{label} contains "Missing Evidence"',
-    "readiness": '{data_readiness} != "GREEN"',
-}
+
+
+def priority_match(d: Dict[str, Any], key: str) -> bool:
+    """Does a queue row match a priority tile?"""
+    gate = d.get("gate_status")
+    if key == "blocked":
+        return gate == "BLOCKED"
+    if key == "review":
+        return gate == "REVIEW_REQUIRED"
+    if key == "draft":
+        return gate == "DRAFT_ONLY"
+    if key == "missing":
+        return (d.get("label") or "").startswith("Missing Evidence")
+    if key == "readiness":
+        return d.get("data_readiness") != "GREEN"
+    return True
+
+
+def queue_data(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build the table-row dicts from portfolio_health rows (governed)."""
+    return [{
+        "rank": i + 1, "equipment_id": r.get("equipment_id"), "pm_id": r.get("pm_id"),
+        "label": r.get("label"), "gate_status": r.get("gate_status"),
+        "next_action": r.get("next_action") or "-", "reason": r.get("gate_reason") or "-",
+        "data_readiness": r.get("data_readiness"), "chevron": ">",
+    } for i, r in enumerate(rows)]
 
 
 def priority_tile_style(active: bool, color: str) -> dict:
@@ -78,15 +97,7 @@ def _priorities_rail(rows: List[Dict[str, Any]]) -> html.Div:
 
 
 def _queue_table(rows: List[Dict[str, Any]]) -> dash_table.DataTable:
-    data = [{
-        "rank": i + 1, "equipment_id": r.get("equipment_id"), "pm_id": r.get("pm_id"),
-        "label": r.get("label"), "gate_status": r.get("gate_status"),
-        "next_action": r.get("next_action") or "-", "reason": r.get("gate_reason") or "-",
-        "data_readiness": r.get("data_readiness"), "chevron": ">",
-    } for i, r in enumerate(rows)]
-
     style_cond = [
-        # blue, clickable-looking asset / PM name -> opens Studio
         {"if": {"column_id": "equipment_id"}, "color": COLORS["oxy"], "fontWeight": 700},
         {"if": {"column_id": "pm_id"}, "color": COLORS["oxy"]},
         {"if": {"column_id": "chevron"}, "color": COLORS["muted"], "textAlign": "center"},
@@ -103,9 +114,10 @@ def _queue_table(rows: List[Dict[str, Any]]) -> dash_table.DataTable:
             {"name": "Gate", "id": "gate_status"}, {"name": "Recommended Next Action", "id": "next_action"},
             {"name": "Reason", "id": "reason"}, {"name": "", "id": "chevron"},
         ],
-        data=data,
+        data=queue_data(rows),
         hidden_columns=["data_readiness"],
-        filter_action="native", sort_action="native", page_size=15, cell_selectable=True,
+        filter_action="native", filter_options={"case": "insensitive"},
+        sort_action="native", page_size=15, cell_selectable=True,
         style_as_list_view=True,
         style_table={"overflowX": "auto", "minWidth": "100%"},
         style_cell={"fontFamily": "inherit", "fontSize": "12px", "padding": "9px 10px", "textAlign": "left",
@@ -143,6 +155,7 @@ def render_command_center(portfolio_health: Dict[str, Any]) -> html.Div:
             queue,
             html.Div(id="cc-preview", style={"flex": "0 0 auto"}),  # PM preview slide-over (fills on row select)
         ], style={"display": "flex", "alignItems": "flex-start", "gap": "16px"}),
+        dcc.Store(id="cc-all-rows", data=queue_data(rows)),  # full queue for server-side priority filtering
     ], style={"padding": "18px 22px"})
 
 
