@@ -22,6 +22,7 @@ from max_agent.ui.artifacts import (
     render_comparison,
     render_context_bar,
     render_evidence,
+    render_pm_dashboard,
     render_tool_trace,
 )
 from max_agent.ui.chat import render_chat, render_process, render_user_bubble
@@ -154,6 +155,7 @@ def poll_status(_n, session_id):
     Output("context-bar", "children"),
     Output("chat-output", "children"),
     Output("tab-artifacts", "children"),
+    Output("tab-dashboard", "children"),
     Output("tab-preview", "children"),
     Input("asset-dropdown", "value"),
     Input("time-window", "value"),
@@ -185,43 +187,54 @@ def on_context(equipment_id, time_window, review_type, chat_question, session_id
     if question:
         _prog_done(sid)
 
+    empty = html.Div()
     if result.get("error"):
-        blank = html.Div("-", style=MUTED)
-        return (html.Div(), html.Div(result["error"], style={"color": "#b42318"}), blank, blank)
+        return (html.Div(), html.Div(result["error"], style={"color": "#b42318"}), empty, empty, empty)
 
-    chat = render_chat(result) if question else html.Div()  # empty until you ask
-    # Artifacts tab: inspectable objects stacked vertically inline (no explanation blocks - the chat
-    # narrates). Decision + gate are in the chat; the SAP package lives in Work Strategy Studio.
+    # Empty at start; the right panel builds up as you chat. Browsing (no question) renders nothing -
+    # artifacts/dashboard/preview only appear once MAX has answered.
+    if not question:
+        return (html.Div(), empty, empty, empty, empty)
+
+    # Artifacts: visual objects stacked inline (evidence charts/tables, comparison chart, gate/tool
+    # trace) - generated for the answered question. Dashboard: the fleet AI/BI overview (entity-driven
+    # filtering is next). Preview: shown because the conversation resolved to a specific PM.
     artifacts = html.Div(
         [render_evidence(result), render_comparison(result), render_tool_trace(result)],
         style={"display": "flex", "flexDirection": "column", "gap": "12px"},
     )
-    return (render_context_bar(result), chat, artifacts, render_pm_preview(result, actions=False))
+    dashboard = render_pm_dashboard(PORTFOLIO_HEALTH)
+    preview = render_pm_preview(result, actions=False) if result.get("equipment_id") else empty
+    return (render_context_bar(result), render_chat(result), artifacts, dashboard, preview)
 
 
 @app.callback(
     Output("chat-echo", "children"),
     Output("asset-dropdown", "value", allow_duplicate=True),
+    Output("time-window", "value", allow_duplicate=True),
+    Output("review-type", "value", allow_duplicate=True),
     Output("chat-question", "data"),
     Input("chat-send", "n_clicks"),
     Input("chat-input", "n_submit"),
     State("chat-input", "value"),
-    State("asset-dropdown", "value"),
     State("session-id", "data"),
     prevent_initial_call=True,
 )
-def on_chat(_clicks, _submit, text, current_asset, session_id):
+def on_chat(_clicks, _submit, text, session_id):
     text = (text or "").strip()
     if not text:
-        return no_update, no_update, no_update
-    # Show the "MAX is thinking" indicator immediately (before the ~20s run starts).
+        return no_update, no_update, no_update, no_update, no_update
+    # Show the "MAX is thinking" indicator immediately (before the run starts).
     _prog_start(session_id or "ui")
-    resolved = resolve_asset_from_text(text, agent._fleet_index)
-    eid = resolved.get("equipment_id")
+    # Finance-style entity extraction: the model reads the chat and proposes typed entities that scope
+    # the run (equipment_id, time_window, review_type); the deterministic resolver + fleet membership
+    # are the fail-closed floor. When no LLM is bound this is the deterministic resolver (entities.py).
+    ent = agent.extract_entities(text)
+    eid = ent.get("equipment_id")
+    tw = ent.get("time_window") or no_update
+    rt = ent.get("review_type") or no_update
     bubble = render_user_bubble(text)
-    if eid:
-        return bubble, eid, text
-    return bubble, no_update, text  # names no asset -> answer for the currently-selected one
+    return bubble, (eid or no_update), tw, rt, text
 
 
 # --- Command Center interactions ----------------------------------------------

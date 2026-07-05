@@ -16,7 +16,6 @@ from __future__ import annotations
 from dash import dcc, html
 
 from ..orchestrator import MaxAgent
-from .artifacts import render_pm_dashboard
 from .command_center import render_command_center
 from .theme import COLORS, FONT, MUTED
 
@@ -102,10 +101,10 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
 
     # Ask MAX right panel per 50-UI: Artifacts (stacked objects) / Dashboard (fleet PM Health) /
     # conditional Preview. The decision + gate are narrated in the chat; the SAP package lives in Studio.
+    # Empty at start; all three build up as you chat (callbacks populate them once MAX answers).
     tabs = dcc.Tabs(id="artifact-tabs", value="artifacts", children=[
         dcc.Tab(label="Artifacts", value="artifacts", children=html.Div(id="tab-artifacts", style={"padding": "12px"})),
-        dcc.Tab(label="Dashboard", value="dashboard",
-                children=html.Div(render_pm_dashboard(portfolio_health), style={"padding": "12px"})),
+        dcc.Tab(label="Dashboard", value="dashboard", children=html.Div(id="tab-dashboard", style={"padding": "12px"})),
         dcc.Tab(label="Preview", value="preview", children=html.Div(id="tab-preview", style={"padding": "12px"})),
     ])
     right = html.Div([tabs], style={"flex": "1", "padding": "12px", "boxSizing": "border-box", "overflowY": "auto", "background": COLORS["bg"]})

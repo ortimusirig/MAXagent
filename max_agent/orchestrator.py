@@ -131,6 +131,13 @@ class MaxAgent:
         result["user_question"] = text or result.get("user_question")
         return result
 
+    def extract_entities(self, question: str) -> Dict[str, Any]:
+        """Entity extraction for the chat (Finance-style): the model proposes typed entities that scope
+        the run; the deterministic resolver + fleet membership are the fail-closed floor. Degrades to
+        the deterministic resolver when no LLM is bound. See entities.py."""
+        from .entities import extract_entities
+        return extract_entities(self.client, question, self._fleet_index)
+
     def _apply_agentic_narration(self, result: Dict[str, Any], question: str, thread_id: str = "default", on_step=None) -> None:
         """LLM tool-calling narration layer (finance-agent style, with a governance fence).
 
