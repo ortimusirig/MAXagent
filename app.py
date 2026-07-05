@@ -23,12 +23,11 @@ from max_agent.ui.artifacts import (
     render_context_bar,
     render_decision,
     render_evidence,
-    render_pm_health,
     render_sap_package,
     render_tool_trace,
 )
 from max_agent.ui.chat import render_chat, render_process, render_user_bubble
-from max_agent.ui.layout import build_layout
+from max_agent.ui.layout import build_layout, nav_button_style
 from max_agent.ui.theme import MUTED
 
 agent = MaxAgent()
@@ -37,7 +36,7 @@ PORTFOLIO_HEALTH = agent.portfolio_health()
 
 app = Dash(__name__, title="MAX Agent", suppress_callback_exceptions=True)
 server = app.server  # WSGI entry point for gunicorn / Databricks Apps
-app.layout = build_layout(agent)
+app.layout = build_layout(agent, PORTFOLIO_HEALTH)
 
 
 # --- live-progress store (per browser session) ---------------------------------
@@ -96,6 +95,46 @@ app.clientside_callback(
 )
 
 
+# --- workspace shell: Command Center / Ask MAX / Work Strategy Studio ---------
+@app.callback(
+    Output("workspace", "data"),
+    Input("nav-command", "n_clicks"),
+    Input("nav-ask", "n_clicks"),
+    Input("nav-studio", "n_clicks"),
+    Input("pmhealth-table", "active_cell"),
+    prevent_initial_call=True,
+)
+def set_workspace(_c, _a, _s, active_cell):
+    trig = ctx.triggered_id
+    if trig in ("nav-command", "nav-ask", "nav-studio"):
+        return trig.split("-", 1)[1]
+    if trig == "pmhealth-table" and active_cell:
+        return "ask"  # drilling into a queue row opens that asset in Ask MAX
+    return no_update
+
+
+@app.callback(
+    Output("ws-command", "style"),
+    Output("ws-ask", "style"),
+    Output("ws-studio", "style"),
+    Output("nav-command", "style"),
+    Output("nav-ask", "style"),
+    Output("nav-studio", "style"),
+    Input("workspace", "data"),
+)
+def render_workspace(workspace):
+    workspace = workspace or "command"
+    hide = {"display": "none"}
+    return (
+        {"display": "block"} if workspace == "command" else hide,
+        {"display": "block"} if workspace == "ask" else hide,
+        {"display": "block", "padding": "18px 22px"} if workspace == "studio" else {"display": "none", "padding": "18px 22px"},
+        nav_button_style(workspace == "command"),
+        nav_button_style(workspace == "ask"),
+        nav_button_style(workspace == "studio"),
+    )
+
+
 @app.callback(
     Output("chat-status", "children"),
     Input("thinking-interval", "n_intervals"),
@@ -112,7 +151,6 @@ def poll_status(_n, session_id):
 @app.callback(
     Output("context-bar", "children"),
     Output("chat-output", "children"),
-    Output("tab-pmhealth", "children"),
     Output("tab-decision", "children"),
     Output("tab-evidence", "children"),
     Output("tab-comparison", "children"),
@@ -152,13 +190,12 @@ def on_context(equipment_id, time_window, review_type, audit, chat_question, ses
     if result.get("error"):
         blank = html.Div("-", style=MUTED)
         return (html.Div(), html.Div(result["error"], style={"color": "#b42318"}),
-                render_pm_health(PORTFOLIO_HEALTH), blank, blank, blank, blank, blank)
+                blank, blank, blank, blank, blank)
 
     chat = render_chat(result) if question else html.Div()  # empty until you ask
     return (
         render_context_bar(result),
         chat,
-        render_pm_health(PORTFOLIO_HEALTH),
         render_decision(result),
         render_evidence(result),
         render_comparison(result),
