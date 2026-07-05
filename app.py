@@ -27,6 +27,13 @@ from max_agent.ui.artifacts import (
     render_tool_trace,
 )
 from max_agent.ui.chat import render_chat, render_process, render_user_bubble
+from max_agent.ui.command_center import (
+    FILTER_BY_PRIORITY,
+    PRIORITY_KEYS,
+    _PRIORITY,
+    priority_tile_style,
+    render_pm_preview,
+)
 from max_agent.ui.layout import build_layout, nav_button_style
 from max_agent.ui.theme import MUTED
 
@@ -101,15 +108,12 @@ app.clientside_callback(
     Input("nav-command", "n_clicks"),
     Input("nav-ask", "n_clicks"),
     Input("nav-studio", "n_clicks"),
-    Input("pmhealth-table", "active_cell"),
     prevent_initial_call=True,
 )
-def set_workspace(_c, _a, _s, active_cell):
+def set_workspace(_c, _a, _s):
     trig = ctx.triggered_id
     if trig in ("nav-command", "nav-ask", "nav-studio"):
         return trig.split("-", 1)[1]
-    if trig == "pmhealth-table" and active_cell:
-        return "ask"  # drilling into a queue row opens that asset in Ask MAX
     return no_update
 
 
@@ -229,20 +233,69 @@ def on_chat(_clicks, _submit, text, current_asset, session_id):
     return bubble, no_update, text  # names no asset -> answer for the currently-selected one
 
 
+# --- Command Center interactions ----------------------------------------------
 @app.callback(
+    Output("cc-preview", "children"),
     Output("asset-dropdown", "value", allow_duplicate=True),
+    Output("workspace", "data", allow_duplicate=True),
     Input("pmhealth-table", "active_cell"),
     State("pmhealth-table", "data"),
     prevent_initial_call=True,
 )
-def on_drilldown(active_cell, data):
+def on_queue_click(active_cell, data):
     if not active_cell or not data:
-        return no_update
+        return no_update, no_update, no_update
     row = active_cell.get("row")
     if row is None or row >= len(data):
-        return no_update
+        return no_update, no_update, no_update
     eid = data[row].get("equipment_id")
-    return eid or no_update
+    if active_cell.get("column_id") in ("equipment_id", "pm_id"):
+        return no_update, eid, "studio"  # asset / PM name -> Work Strategy Studio directly
+    return render_pm_preview(agent.run(eid)), eid, no_update  # row body -> PM preview slide-over
+
+
+@app.callback(
+    Output("workspace", "data", allow_duplicate=True),
+    Output("cc-preview", "children", allow_duplicate=True),
+    Input("cc-ask-btn", "n_clicks"),
+    Input("cc-studio-btn", "n_clicks"),
+    Input("cc-preview-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def on_preview_action(_ask, _studio, _close):
+    trig = ctx.triggered_id
+    if trig == "cc-ask-btn":
+        return "ask", no_update       # both carry the already-set asset scope forward
+    if trig == "cc-studio-btn":
+        return "studio", no_update
+    if trig == "cc-preview-close":
+        return no_update, html.Div()  # clear the slide-over
+    return no_update, no_update
+
+
+@app.callback(
+    Output("pmhealth-table", "filter_query"),
+    Output("cc-active-priority", "data"),
+    Output("cc-prio-blocked", "style"),
+    Output("cc-prio-review", "style"),
+    Output("cc-prio-draft", "style"),
+    Output("cc-prio-missing", "style"),
+    Output("cc-prio-readiness", "style"),
+    Input("cc-prio-blocked", "n_clicks"),
+    Input("cc-prio-review", "n_clicks"),
+    Input("cc-prio-draft", "n_clicks"),
+    Input("cc-prio-missing", "n_clicks"),
+    Input("cc-prio-readiness", "n_clicks"),
+    State("cc-active-priority", "data"),
+    prevent_initial_call=True,
+)
+def on_priority(*args):
+    active = args[-1]
+    key = (ctx.triggered_id or "").replace("cc-prio-", "")
+    new_active = None if active == key else key  # clicking the active tile clears the filter
+    fq = "" if new_active is None else FILTER_BY_PRIORITY.get(key, "")
+    styles = tuple(priority_tile_style(k == new_active, _PRIORITY[k][2]) for k in PRIORITY_KEYS)
+    return (fq, new_active) + styles
 
 
 @app.callback(

@@ -412,6 +412,7 @@ class MaxAgent:
             r = self._run_asset(asset, narrate=False)  # portfolio rows never use chat_summary; skip the LLM
             rows.append({
                 "equipment_id": r["equipment_id"], "asset_class": r["asset_class"],
+                "pm_id": r.get("pm_id"),
                 "criticality": asset["master_data"]["criticality"]["code"],
                 "label": r.get("classifier_label"), "gate_status": r.get("gate_status"),
                 "gate_reason": r.get("gate_reason") or r.get("gate_review_trigger"),
