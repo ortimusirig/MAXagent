@@ -31,6 +31,17 @@ REVIEW_TYPES = {
 }
 CRITICALITY = {"0", "1", "2", "3", "4", "N"}
 
+# The closed catalog of VISUAL artifacts the model may select for the Ask MAX Artifacts tab
+# (name -> when it applies). The renderers live in ui/artifact_catalog.py.
+ARTIFACT_CHOICES = {
+    "work_order_mix": "PM vs corrective/reactive work-order mix chart",
+    "data_readiness": "data-readiness RAG and the SAP data still needed",
+    "cost": "honest cost view (material vs labor basis)",
+    "comparison": "like-equipment comparison and standardization candidates",
+    "evidence_table": "scoped work-order and failure-coding records table",
+    "gate_trace": "deterministic gate result and tool-execution trace",
+}
+
 ENTITY_SYSTEM = (
     "You are MAX's entity extractor for Oxy preventive-maintenance questions. Read the user's question "
     "and return ONLY a JSON object of the entities you can identify, using the fields and CLOSED "
@@ -45,6 +56,10 @@ ENTITY_SYSTEM = (
     "(map 'last year'->LAST_12_MONTHS, '2 years'->LAST_24_MONTHS, '3 years'->LAST_36_MONTHS).\n"
     "- review_type: one of 'PM effectiveness and strategy review', 'Frequency change review', "
     "'CBM conversion review', 'Task list cleanup review', 'Retire / run-to-failure review'.\n"
+    "- artifacts: a JSON list naming ONLY the visual artifacts this answer needs, chosen from: "
+    "work_order_mix, data_readiness, cost, comparison, evidence_table, gate_trace. Pick the few that "
+    "fit the question (e.g. a frequency question needs comparison + work_order_mix + gate_trace; a "
+    "cost question needs cost; a 'why blocked' question needs gate_trace + data_readiness).\n"
     "Return strictly JSON with only the fields you found. No prose, no code fences."
 )
 
@@ -104,6 +119,9 @@ def extract_entities(client, question: str, fleet: Dict[str, Dict[str, Any]]) ->
     crit = llm.get("criticality")
     crit = str(crit) if crit is not None else None
 
+    arts = llm.get("artifacts")
+    artifacts = [a for a in arts if a in ARTIFACT_CHOICES] if isinstance(arts, list) else []
+
     return {
         "equipment_id": eid,
         "asset_class": _valid(llm.get("asset_class"), set(known["asset_classes"])),
@@ -112,6 +130,7 @@ def extract_entities(client, question: str, fleet: Dict[str, Dict[str, Any]]) ->
         "pm_id": llm.get("pm_id") or None,
         "time_window": _valid(llm.get("time_window"), TIME_WINDOWS) or "LAST_24_MONTHS",
         "review_type": _valid(llm.get("review_type"), REVIEW_TYPES),
+        "artifacts": artifacts,  # model-selected visual artifacts (validated to the closed catalog)
         "provenance": "llm+deterministic" if llm else "deterministic",
         "matched_on": det.get("matched_on"),
         "candidates": det.get("candidates", []),

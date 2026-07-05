@@ -128,6 +128,7 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
         dcc.Store(id="cc-active-priority"),
         dcc.Store(id="approval-audit", data=[]),
         dcc.Store(id="chat-question"),
+        dcc.Store(id="chat-artifacts"),  # model-selected artifact names for the current answer
         dcc.Store(id="session-id"),
         dcc.Interval(id="thinking-interval", interval=600, n_intervals=0),
     ], style={"fontFamily": FONT, "background": COLORS["bg"], "color": COLORS["ink"], "minHeight": "100vh"})

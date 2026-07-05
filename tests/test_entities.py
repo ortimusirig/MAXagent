@@ -69,3 +69,16 @@ def test_agent_extract_entities_method():
     agent = MaxAgent()  # no LLM bound locally -> deterministic
     ent = agent.extract_entities("why does COMP-2201 keep failing?")
     assert ent["equipment_id"] == "COMP-2201"
+
+
+def test_llm_selects_artifacts_validated():
+    fleet = _fleet()
+    eid = next(iter(fleet))
+    reply = '{"equipment_id": "%s", "artifacts": ["comparison", "gate_trace", "bogus_artifact"]}' % eid
+    ent = extract_entities(_FakeClient(True, reply), "compare this pump to peers", fleet)
+    assert ent["artifacts"] == ["comparison", "gate_trace"]  # invalid name dropped
+
+
+def test_no_llm_selects_no_artifacts():
+    ent = extract_entities(_FakeClient(False), "is PUMP-4102 effective?", _fleet())
+    assert ent["artifacts"] == []  # renderer falls back to the deterministic default

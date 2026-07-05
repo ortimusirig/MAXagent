@@ -18,13 +18,8 @@ from flask import request
 
 from max_agent.orchestrator import MaxAgent
 from max_agent.intent import resolve_asset_from_text
-from max_agent.ui.artifacts import (
-    render_comparison,
-    render_context_bar,
-    render_evidence,
-    render_pm_dashboard,
-    render_tool_trace,
-)
+from max_agent.ui.artifact_catalog import render_artifacts
+from max_agent.ui.artifacts import render_context_bar
 from max_agent.ui.chat import render_chat, render_process, render_user_bubble
 from max_agent.ui.command_center import (
     PRIORITY_KEYS,
@@ -161,9 +156,10 @@ def poll_status(_n, session_id):
     Input("time-window", "value"),
     Input("review-type", "value"),
     Input("chat-question", "data"),
+    State("chat-artifacts", "data"),
     State("session-id", "data"),
 )
-def on_context(equipment_id, time_window, review_type, chat_question, session_id):
+def on_context(equipment_id, time_window, review_type, chat_question, chat_artifacts, session_id):
     actor = _current_actor()
     sid = session_id or "ui"
     # Narrate (run MAX) only when the ASK triggered this render; browsing stays fast and shows no answer.
@@ -196,14 +192,11 @@ def on_context(equipment_id, time_window, review_type, chat_question, session_id
     if not question:
         return (html.Div(), empty, empty, empty, empty)
 
-    # Artifacts: visual objects stacked inline (evidence charts/tables, comparison chart, gate/tool
-    # trace) - generated for the answered question. Dashboard: the fleet AI/BI overview (entity-driven
-    # filtering is next). Preview: shown because the conversation resolved to a specific PM.
-    artifacts = html.Div(
-        [render_evidence(result), render_comparison(result), render_tool_trace(result)],
-        style={"display": "flex", "flexDirection": "column", "gap": "12px"},
-    )
-    dashboard = render_pm_dashboard(PORTFOLIO_HEALTH)
+    # Artifacts: the visual objects the MODEL selected for this question (charts/tables/comparison/gate
+    # trace), stacked inline; a deterministic default set is the fail-closed floor. Dashboard: kept
+    # empty for now (the AI/BI dashboard embed lands later). Preview: shown for a specific PM.
+    artifacts = render_artifacts(result, chat_artifacts)
+    dashboard = html.Div("AI/BI dashboard - to be embedded (kept empty for now).", style=MUTED)
     preview = render_pm_preview(result, actions=False) if result.get("equipment_id") else empty
     return (render_context_bar(result), render_chat(result), artifacts, dashboard, preview)
 
@@ -214,6 +207,7 @@ def on_context(equipment_id, time_window, review_type, chat_question, session_id
     Output("time-window", "value", allow_duplicate=True),
     Output("review-type", "value", allow_duplicate=True),
     Output("chat-question", "data"),
+    Output("chat-artifacts", "data"),
     Input("chat-send", "n_clicks"),
     Input("chat-input", "n_submit"),
     State("chat-input", "value"),
@@ -223,18 +217,18 @@ def on_context(equipment_id, time_window, review_type, chat_question, session_id
 def on_chat(_clicks, _submit, text, session_id):
     text = (text or "").strip()
     if not text:
-        return no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update
     # Show the "MAX is thinking" indicator immediately (before the run starts).
     _prog_start(session_id or "ui")
     # Finance-style entity extraction: the model reads the chat and proposes typed entities that scope
-    # the run (equipment_id, time_window, review_type); the deterministic resolver + fleet membership
-    # are the fail-closed floor. When no LLM is bound this is the deterministic resolver (entities.py).
+    # the run (equipment_id, time_window, review_type) AND selects the visual artifacts the answer
+    # needs; the deterministic resolver + closed vocabularies are the fail-closed floor (entities.py).
     ent = agent.extract_entities(text)
     eid = ent.get("equipment_id")
     tw = ent.get("time_window") or no_update
     rt = ent.get("review_type") or no_update
     bubble = render_user_bubble(text)
-    return bubble, (eid or no_update), tw, rt, text
+    return bubble, (eid or no_update), tw, rt, text, ent.get("artifacts") or []
 
 
 # --- Command Center interactions ----------------------------------------------
