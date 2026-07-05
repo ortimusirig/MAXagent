@@ -257,21 +257,28 @@ def on_queue_click(active_cell, data):
 @app.callback(
     Output("workspace", "data", allow_duplicate=True),
     Output("cc-preview", "children", allow_duplicate=True),
+    Output("chat-question", "data", allow_duplicate=True),
+    Output("chat-echo", "children", allow_duplicate=True),
     Input("cc-ask-btn", "n_clicks"),
     Input("cc-studio-btn", "n_clicks"),
     Input("cc-preview-close", "n_clicks"),
+    State("asset-dropdown", "value"),
+    State("session-id", "data"),
     prevent_initial_call=True,
 )
-def on_preview_action(ask, studio, close):
+def on_preview_action(ask, studio, close, asset, session_id):
     trig = ctx.triggered_id
     # Guard on n_clicks so the dynamically-created buttons don't fire on creation (n_clicks=0).
     if trig == "cc-ask-btn" and ask:
-        return "ask", no_update       # both carry the already-set asset scope forward
+        # Land in Ask MAX with a governed starter question already asked for this PM.
+        q = f"Is the PM on {asset} effective, and should anything change?"
+        _prog_start(session_id or "ui")
+        return "ask", no_update, q, render_user_bubble(q)
     if trig == "cc-studio-btn" and studio:
-        return "studio", no_update
+        return "studio", no_update, no_update, no_update
     if trig == "cc-preview-close" and close:
-        return no_update, html.Div()  # clear the slide-over
-    return no_update, no_update
+        return no_update, html.Div(), no_update, no_update  # clear the slide-over
+    return no_update, no_update, no_update, no_update
 
 
 @app.callback(
