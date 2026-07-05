@@ -21,9 +21,7 @@ from max_agent.intent import resolve_asset_from_text
 from max_agent.ui.artifacts import (
     render_comparison,
     render_context_bar,
-    render_decision,
     render_evidence,
-    render_sap_package,
     render_tool_trace,
 )
 from max_agent.ui.chat import render_chat, render_process, render_user_bubble
@@ -155,19 +153,15 @@ def poll_status(_n, session_id):
 @app.callback(
     Output("context-bar", "children"),
     Output("chat-output", "children"),
-    Output("tab-decision", "children"),
-    Output("tab-evidence", "children"),
-    Output("tab-comparison", "children"),
-    Output("tab-sap", "children"),
-    Output("tab-trace", "children"),
+    Output("tab-artifacts", "children"),
+    Output("tab-preview", "children"),
     Input("asset-dropdown", "value"),
     Input("time-window", "value"),
     Input("review-type", "value"),
-    Input("approval-audit", "data"),
     Input("chat-question", "data"),
     State("session-id", "data"),
 )
-def on_context(equipment_id, time_window, review_type, audit, chat_question, session_id):
+def on_context(equipment_id, time_window, review_type, chat_question, session_id):
     actor = _current_actor()
     sid = session_id or "ui"
     # Narrate (run MAX) only when the ASK triggered this render; browsing stays fast and shows no answer.
@@ -193,19 +187,16 @@ def on_context(equipment_id, time_window, review_type, audit, chat_question, ses
 
     if result.get("error"):
         blank = html.Div("-", style=MUTED)
-        return (html.Div(), html.Div(result["error"], style={"color": "#b42318"}),
-                blank, blank, blank, blank, blank)
+        return (html.Div(), html.Div(result["error"], style={"color": "#b42318"}), blank, blank)
 
     chat = render_chat(result) if question else html.Div()  # empty until you ask
-    return (
-        render_context_bar(result),
-        chat,
-        render_decision(result),
-        render_evidence(result),
-        render_comparison(result),
-        render_sap_package(result, audit=audit),
-        render_tool_trace(result),
+    # Artifacts tab: inspectable objects stacked vertically inline (no explanation blocks - the chat
+    # narrates). Decision + gate are in the chat; the SAP package lives in Work Strategy Studio.
+    artifacts = html.Div(
+        [render_evidence(result), render_comparison(result), render_tool_trace(result)],
+        style={"display": "flex", "flexDirection": "column", "gap": "12px"},
     )
+    return (render_context_bar(result), chat, artifacts, render_pm_preview(result, actions=False))
 
 
 @app.callback(

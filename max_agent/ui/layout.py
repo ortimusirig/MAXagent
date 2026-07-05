@@ -16,6 +16,7 @@ from __future__ import annotations
 from dash import dcc, html
 
 from ..orchestrator import MaxAgent
+from .artifacts import render_pm_dashboard
 from .command_center import render_command_center
 from .theme import COLORS, FONT, MUTED
 
@@ -99,12 +100,13 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
     ], style={"width": "34%", "minWidth": "320px", "padding": "18px", "borderRight": f"1px solid {COLORS['line']}",
               "boxSizing": "border-box", "display": "flex", "flexDirection": "column", "height": "100%"})
 
-    tabs = dcc.Tabs(id="artifact-tabs", value="decision", children=[
-        dcc.Tab(label="Decision", value="decision", children=html.Div(id="tab-decision", style={"padding": "12px"})),
-        dcc.Tab(label="Evidence", value="evidence", children=html.Div(id="tab-evidence", style={"padding": "12px"})),
-        dcc.Tab(label="Comparison", value="comparison", children=html.Div(id="tab-comparison", style={"padding": "12px"})),
-        dcc.Tab(label="SAP Package", value="sap", children=html.Div(id="tab-sap", style={"padding": "12px"})),
-        dcc.Tab(label="Tool Trace", value="trace", children=html.Div(id="tab-trace", style={"padding": "12px"})),
+    # Ask MAX right panel per 50-UI: Artifacts (stacked objects) / Dashboard (fleet PM Health) /
+    # conditional Preview. The decision + gate are narrated in the chat; the SAP package lives in Studio.
+    tabs = dcc.Tabs(id="artifact-tabs", value="artifacts", children=[
+        dcc.Tab(label="Artifacts", value="artifacts", children=html.Div(id="tab-artifacts", style={"padding": "12px"})),
+        dcc.Tab(label="Dashboard", value="dashboard",
+                children=html.Div(render_pm_dashboard(portfolio_health), style={"padding": "12px"})),
+        dcc.Tab(label="Preview", value="preview", children=html.Div(id="tab-preview", style={"padding": "12px"})),
     ])
     right = html.Div([tabs], style={"flex": "1", "padding": "12px", "boxSizing": "border-box", "overflowY": "auto", "background": COLORS["bg"]})
     ws_ask = html.Div([

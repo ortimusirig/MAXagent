@@ -172,7 +172,9 @@ def _pill(text: str, color: str) -> html.Span:
                                           "background": color, "color": "white", "fontSize": "11px", "fontWeight": 700})
 
 
-def render_pm_preview(result: Dict[str, Any]) -> html.Div:
+def render_pm_preview(result: Dict[str, Any], actions: bool = True) -> html.Div:
+    """PM preview. actions=True: the Command Center slide-over (close + Ask/Studio CTAs).
+    actions=False: the read-only Ask MAX 'Preview' tab (no CTA ids, so no duplicate-id clash)."""
     if not result or result.get("error"):
         return html.Div()
     eid = result.get("equipment_id")
@@ -188,17 +190,16 @@ def render_pm_preview(result: Dict[str, Any]) -> html.Div:
     oxy_ctx = ("Criticality / mandatory-protected PM; human review required; MAX cannot write SAP."
                if protected else "Draft-only in Wave 1; humans approve; MAX cannot write SAP.")
 
-    return html.Div([
-        html.Div([
-            html.Div(f"{eid}  PM Review Preview", style={"fontSize": "15px", "fontWeight": 800, "color": COLORS["ink"]}),
-            html.Button("x", id="cc-preview-close", n_clicks=0,
-                        style={"border": "none", "background": "transparent", "cursor": "pointer",
-                               "fontSize": "18px", "color": COLORS["muted"]}),
-        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "10px"}),
+    header_kids = [html.Div(f"{eid}  PM Review Preview", style={"fontSize": "15px", "fontWeight": 800, "color": COLORS["ink"]})]
+    if actions:
+        header_kids.append(html.Button("x", id="cc-preview-close", n_clicks=0,
+                                       style={"border": "none", "background": "transparent", "cursor": "pointer",
+                                              "fontSize": "18px", "color": COLORS["muted"]}))
 
+    children = [
+        html.Div(header_kids, style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "10px"}),
         html.Div([html.Span(eid, style={"fontSize": "17px", "fontWeight": 800, "color": COLORS["oxy"], "marginRight": "10px"}),
                   _pill(gate, gate_color)], style={"marginBottom": "10px"}),
-
         _line("Asset Type", result.get("asset_class")),
         _line("Criticality", f"{result.get('criticality_code')} {result.get('criticality_label') or ''}".strip()),
         _line("Current PM", current_pm),
@@ -206,26 +207,29 @@ def render_pm_preview(result: Dict[str, Any]) -> html.Div:
         html.Hr(style={"border": "none", "borderTop": f"1px solid {COLORS['line']}", "margin": "10px 0"}),
         html.Div([html.Span("Gate  ", style={"color": COLORS["muted"], "fontSize": "12px"}), _pill(gate, gate_color)]),
         _line("Reason", reason),
-
         html.Div("Plain-language reason", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px"}),
         html.Div(rationale, style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
         html.Div("Oxy context", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px", "color": COLORS["oxy"]}),
         html.Div(oxy_ctx, style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
-
         html.Div("Allowed next action", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px", "color": "#15803d"}),
         html.Div(", ".join(allowed) if allowed else (result.get("recommendation_next_action") or "-"),
                  style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
         html.Div("Blocked action", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px", "color": "#c1261b"}),
         html.Div(", ".join(blocked) if blocked else "Direct SAP update / unattended reduction",
                  style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
-
-        html.Button("Ask MAX about this PM", id="cc-ask-btn", n_clicks=0,
-                    style={"width": "100%", "marginTop": "16px", "padding": "11px", "border": "none",
-                           "borderRadius": "10px", "background": COLORS["oxy"], "color": "white",
-                           "fontWeight": 700, "cursor": "pointer"}),
-        html.Button("Open in Studio", id="cc-studio-btn", n_clicks=0,
-                    style={"width": "100%", "marginTop": "8px", "padding": "11px", "cursor": "pointer",
-                           "border": f"1px solid {COLORS['oxy']}", "borderRadius": "10px",
-                           "background": "white", "color": COLORS["oxy"], "fontWeight": 700}),
-    ], style={"flex": "0 0 340px", "width": "340px", "background": "white", "border": f"1px solid {COLORS['line']}",
-              "borderRadius": "12px", "padding": "16px 18px", "boxShadow": "0 2px 12px rgba(11,36,49,0.08)"})
+    ]
+    if actions:
+        children += [
+            html.Button("Ask MAX about this PM", id="cc-ask-btn", n_clicks=0,
+                        style={"width": "100%", "marginTop": "16px", "padding": "11px", "border": "none",
+                               "borderRadius": "10px", "background": COLORS["oxy"], "color": "white",
+                               "fontWeight": 700, "cursor": "pointer"}),
+            html.Button("Open in Studio", id="cc-studio-btn", n_clicks=0,
+                        style={"width": "100%", "marginTop": "8px", "padding": "11px", "cursor": "pointer",
+                               "border": f"1px solid {COLORS['oxy']}", "borderRadius": "10px",
+                               "background": "white", "color": COLORS["oxy"], "fontWeight": 700}),
+        ]
+    wrap = {"background": "white", "border": f"1px solid {COLORS['line']}", "borderRadius": "12px", "padding": "16px 18px"}
+    if actions:
+        wrap.update({"flex": "0 0 340px", "width": "340px", "boxShadow": "0 2px 12px rgba(11,36,49,0.08)"})
+    return html.Div(children, style=wrap)

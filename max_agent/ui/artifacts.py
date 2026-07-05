@@ -333,6 +333,42 @@ def render_pm_health(health: Dict[str, Any]) -> html.Div:
     ])
 
 
+def render_pm_dashboard(health: Dict[str, Any]) -> html.Div:
+    """The PM Health Dashboard artifact (Ask MAX right panel): charts + metrics + KPIs, no queue.
+
+    The triage queue itself lives in the Command Center; this is the portfolio dashboard the doc puts
+    under the Ask MAX 'Dashboard' tab. Fleet-level and static (counts only, no realized savings)."""
+    if isinstance(health, list):
+        health = {"rows": health, "metrics": {}, "kpis": {}}
+    rows = health.get("rows", [])
+    metrics = health.get("metrics", {})
+    kpis = (health.get("kpis") or {}).get("kpis", [])
+    by_gate = metrics.get("by_gate_status", {})
+    kpi_rows = [[k.get("kpi"), k.get("unit"), k.get("basis"), "-" if k.get("value") is None else k.get("value")] for k in kpis]
+    return html.Div([
+        html.Div([
+            dcc.Graph(figure=gate_status_figure(rows), config={"displayModeBar": False}),
+            dcc.Graph(figure=data_readiness_figure(rows), config={"displayModeBar": False}),
+            dcc.Graph(figure=criticality_figure(rows), config={"displayModeBar": False}),
+        ], style=CARD),
+        html.Div([
+            html.Div("PM health metrics (pm_health_dashboard_metrics)", style=H2),
+            _kv("Population", metrics.get("population_count", len(rows))),
+            _kv("Blocked", by_gate.get("BLOCKED", 0)),
+            _kv("Review-required", by_gate.get("REVIEW_REQUIRED", 0)),
+            _kv("Draft-only", by_gate.get("DRAFT_ONLY", 0)),
+            _kv("Pass", by_gate.get("PASS", 0)),
+            _kv("Do-not-optimize", metrics.get("do_not_optimize_count", 0)),
+            html.Div("Counts only - no realized-savings or effectiveness score implied (thresholds null / value baseline-only). Synthetic-data mode.", style=MUTED),
+        ], style=CARD),
+        html.Div([
+            html.Div("Value KPIs (value_kpi_tracker - baseline only)", style=H2),
+            _table(["KPI", "Unit", "Basis", "Value"], kpi_rows) if kpi_rows else html.Div("-", style=MUTED),
+            html.Div("Savings claims are not allowed: labor cost is 0 in the sample; avoided hours/cost are not computable (F1).", style=MUTED),
+        ], style=CARD),
+    ])
+
+
 # --- Comparison -------------------------------------------------------------
 def render_comparison(r: Dict[str, Any]) -> html.Div:
     change_card = html.Div([
