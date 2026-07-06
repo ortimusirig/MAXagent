@@ -13,14 +13,15 @@ from __future__ import annotations
 import os
 import threading
 
-from dash import Dash, Input, Output, State, ctx, html, no_update
+from dash import ALL, MATCH, Dash, Input, Output, State, ctx, dcc, html, no_update
 from flask import request
 
 from max_agent.orchestrator import MaxAgent
 from max_agent.intent import resolve_asset_from_text
-from max_agent.ui.artifact_catalog import render_artifacts
-from max_agent.ui.artifacts import render_context_bar
-from max_agent.ui.chat import render_chat, render_process, render_user_bubble
+from max_agent.ui.artifact_catalog import render_artifact_history, render_trace_history
+from max_agent.ui.artifacts import _audit_trail, render_context_bar
+from max_agent.ui.studio import render_studio
+from max_agent.ui.chat import render_chat, render_process, render_transcript, render_user_bubble
 from max_agent.ui.command_center import (
     PRIORITY_KEYS,
     _PRIORITY,
@@ -29,7 +30,6 @@ from max_agent.ui.command_center import (
     render_pm_preview,
 )
 from max_agent.ui.layout import build_layout, nav_button_style
-from max_agent.ui.theme import MUTED
 
 agent = MaxAgent()
 # PM Health is deterministic/static for the synthetic fleet; compute once (queue-first landing).
@@ -88,6 +88,20 @@ def _current_actor() -> dict:
     return {"user_id": "local", "roles": [], "source": "local"}
 
 
+def _last_governed_result(history):
+    """The most recent history entry that actually carries a governed `result`.
+
+    Free-flow turns append a card WITHOUT a `result` key (only a `ref` summary), so reading `[-1]` loses
+    the grounding after ONE free-flow turn and the next follow-up falls back to GOVERNED (re-runs the
+    pipeline). Scanning back keeps the free-flow lane grounded on the last governed decision across
+    MULTIPLE consecutive follow-ups - the mental model's "FREE_FLOW uses this turn or the last governed
+    result." Read-only: it never mints a new gate/label/recommendation."""
+    for entry in reversed(history or []):
+        if entry.get("result"):
+            return entry.get("result")
+    return None
+
+
 # A per-browser session id (so one user's live status never leaks into another's).
 app.clientside_callback(
     "function(_){ return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('s'+Math.random().toString(36).slice(2)); }",
@@ -126,7 +140,7 @@ def render_workspace(workspace):
     return (
         {"display": "block"} if workspace == "command" else hide,
         {"display": "block"} if workspace == "ask" else hide,
-        {"display": "block", "padding": "18px 22px"} if workspace == "studio" else {"display": "none", "padding": "18px 22px"},
+        {"display": "block"} if workspace == "studio" else hide,  # Studio content owns its own padding
         nav_button_style(workspace == "command"),
         nav_button_style(workspace == "ask"),
         nav_button_style(workspace == "studio"),
@@ -148,8 +162,10 @@ def poll_status(_n, session_id):
 
 @app.callback(
     Output("context-bar", "children"),
-    Output("chat-output", "children"),
-    Output("tab-artifacts", "children"),
+    Output("chat-messages", "data", allow_duplicate=True),
+    Output("artifacts-history", "data"),
+    Output("artifacts-collapsed", "data"),
+    Output("trace-collapsed", "data"),
     Output("tab-dashboard", "children"),
     Output("tab-preview", "children"),
     Input("asset-dropdown", "value"),
@@ -158,18 +174,85 @@ def poll_status(_n, session_id):
     Input("chat-question", "data"),
     State("chat-artifacts", "data"),
     State("session-id", "data"),
+    State("artifacts-history", "data"),
+    State("chat-messages", "data"),
+    prevent_initial_call=True,
 )
-def on_context(equipment_id, time_window, review_type, chat_question, chat_artifacts, session_id):
+def on_context(equipment_id, time_window, review_type, chat_question, chat_artifacts, session_id, history, messages):
     actor = _current_actor()
     sid = session_id or "ui"
+    empty = html.Div()
     # Narrate (run MAX) only when the ASK triggered this render; browsing stays fast and shows no answer.
     triggered = {t["prop_id"].split(".")[0] for t in (ctx.triggered or [])}
     question = None
     if "chat-question" in triggered and chat_question:
         r = resolve_asset_from_text(chat_question, agent._fleet_index)
         reid = r.get("equipment_id")
+        if reid is None and r.get("candidates"):
+            _prog_done(sid)
+            choices = ", ".join(r.get("candidates", [])[:8])
+            suffix = "..." if len(r.get("candidates", [])) > 8 else ""
+            msg = (
+                "I found multiple matching assets. Please name the specific equipment ID before I run "
+                f"a governed PM review: {choices}{suffix}."
+            )
+            return (no_update, (messages or []) + [{"role": "assistant", "summary": msg}],
+                    no_update, no_update, no_update, no_update, no_update)
         if reid is None or reid == equipment_id:
             question = chat_question
+
+    # FREE-FLOW ROUTING: MAX is free-flow by default; the governance DAG is a route the intent triggers.
+    # A follow-up / definition / greeting is answered conversationally from the LAST governed result +
+    # glossary + transcript, WITHOUT re-running the pipeline. Read-only: it can never mint a new gate,
+    # label, or recommendation. Fail-safe: anything not clearly FREE_FLOW routes to GOVERNED (the DAG).
+    if question:
+        last_result = _last_governed_result(history)
+        if agent.classify_intent(question, messages, has_last_result=bool(last_result)) == "FREE_FLOW":
+            _prog_start(sid)
+
+            def on_step(tool, _sid=sid):  # noqa: E306  (display-only: appends each tool to the checklist)
+                _prog_step(_sid, tool)
+
+            # Sub-route the free-flow turn: INFO (explain / look up), GATE_CHECK (advisory 'is X allowed'),
+            # or APPROVAL (approve / reject the recommendation just discussed).
+            ff_intent = agent.classify_free_flow_intent(question, messages, has_last_result=bool(last_result))
+            answer = agent.free_flow_answer(question, messages, last_result, intent=ff_intent, on_step=on_step)
+            _prog_done(sid)
+            msgs = (messages or []) + [{"role": "assistant", "summary": answer}]
+            # APPROVAL: MAX SURFACES inline approve/reject buttons for the last governed recommendation.
+            # The LLM only proposes the action; the authenticated human clicks (on_inline_approval), and
+            # approval_workflow_state checks role + gate + self-approval + audit. Draft-only; never SAP.
+            if (ff_intent == "APPROVAL" and last_result and not last_result.get("error")
+                    and last_result.get("equipment_id")):
+                p = last_result.get("package") or {}
+                # Enable Approve when the package can ENTER the human approval path (PASS or REVIEW_REQUIRED),
+                # not only when it can SUBMIT (PASS). "Approve" advances DRAFT -> ANALYST_REVIEWED, a review
+                # step approval_workflow_state allows for REVIEW_REQUIRED; gating on submit_path_available
+                # disabled it for the whole REVIEW_REQUIRED population and pre-empted the deterministic tool.
+                approve_ok = bool(p.get("approval_path_available"))
+                msgs = msgs + [{"role": "assistant", "kind": "approval",
+                                "equipment_id": last_result.get("equipment_id"),
+                                "gate_status": last_result.get("gate_status"), "approve_ok": approve_ok}]
+            # Free-flow now ALSO produces a READ-ONLY artifact card (summary + detail) in the Artifacts
+            # panel, grounded in the last governed decision. No governed pipeline runs, so the context bar
+            # and preview stay on the last governed asset (no_update); the entry is marked kind="free_flow"
+            # so the history renderers show a free-flow card (and a "no governed pipeline" trace note).
+            if last_result and not last_result.get("error"):
+                from datetime import datetime
+                lr = last_result
+                ref = {"equipment_id": lr.get("equipment_id"), "gate_status": lr.get("gate_status"),
+                       "gate_reason": lr.get("gate_reason") or lr.get("gate_review_trigger"),
+                       "recommendation_type": lr.get("recommendation_type"),
+                       "change_under_review_type": lr.get("change_under_review_type"),
+                       "evidence_lines": (lr.get("evidence_digest") or {}).get("lines") or []}
+                n = max((e.get("n", 0) for e in (history or [])), default=0) + 1
+                ff_entry = {"n": n, "question": question, "ts": datetime.now().strftime("%H:%M:%S"),
+                            "kind": "free_flow", "intent": ff_intent, "answer": answer, "ref": ref}
+                new_history = ((history or []) + [ff_entry])[-15:]
+                collapsed = [e.get("n") for e in (history or [])]  # collapse priors; the newest opens
+                return (no_update, msgs, new_history, collapsed, collapsed, no_update, no_update)
+            # No prior governed result yet (e.g. a greeting before any analysis) -> transcript only.
+            return (no_update, msgs, no_update, no_update, no_update, no_update, no_update)
 
     on_step = None
     if question:
@@ -183,41 +266,111 @@ def on_context(equipment_id, time_window, review_type, chat_question, chat_artif
     if question:
         _prog_done(sid)
 
-    empty = html.Div()
+    # Browsing / errors never append to the artifacts history (no_update keeps the stack intact).
     if result.get("error"):
-        return (html.Div(), html.Div(result["error"], style={"color": "#b42318"}), empty, empty, empty)
-
-    # Empty at start; the right panel builds up as you chat. Browsing (no question) renders nothing -
-    # artifacts/dashboard/preview only appear once MAX has answered.
+        # Only an Ask (question set) surfaces the error as an assistant turn; browsing leaves chat alone.
+        err_msgs = ((messages or []) + [{"role": "assistant", "summary": result["error"]}]) if question else no_update
+        return (html.Div(), err_msgs, no_update, no_update, no_update, no_update, empty)
     if not question:
-        return (html.Div(), empty, empty, empty, empty)
+        return (html.Div(), no_update, no_update, no_update, no_update, no_update, empty)
 
-    # Artifacts: the visual objects the MODEL selected for this question (charts/tables/comparison/gate
-    # trace), stacked inline; a deterministic default set is the fail-closed floor. Dashboard: kept
-    # empty for now (the AI/BI dashboard embed lands later). Preview: shown for a specific PM.
-    artifacts = render_artifacts(result, chat_artifacts)
-    dashboard = html.Div("AI/BI dashboard - to be embedded (kept empty for now).", style=MUTED)
-    preview = render_pm_preview(result, actions=False) if result.get("equipment_id") else empty
-    return (render_context_bar(result), render_chat(result), artifacts, dashboard, preview)
+    # An answered question APPENDS a new artifact set to the history (newest first, prior ones collapse).
+    # The set stores the model-selected artifacts + the governed result so the stack re-renders from state.
+    from datetime import datetime
+    n = max((e.get("n", 0) for e in (history or [])), default=0) + 1
+    entry = {"n": n, "question": question, "ts": datetime.now().strftime("%H:%M:%S"),
+             "result": result, "selected": chat_artifacts or []}
+    new_history = ((history or []) + [entry])[-15:]        # cap the session history
+    collapsed = [e.get("n") for e in (history or [])]      # collapse all priors; the newest stays open
+    # The Dashboard tab holds the embedded Databricks AI/BI dashboard (rendered once in build_layout);
+    # it is fleet-level and static, so a governed run leaves it untouched (no_update) below.
+    # The chat already carries the full LLM narration; the Preview tab uses the DETERMINISTIC concise
+    # paragraph (narrative=None) so an Ask does not pay a second LLM narration call (latency). The Studio /
+    # Command Center previews keep the LLM paragraph, where they are not on the hot Ask path.
+    preview = (render_pm_preview(result, actions=False)
+               if result.get("equipment_id") else empty)
+    # Append MAX's answer as an assistant turn so the transcript accumulates (the user turn was added
+    # by on_chat / on_preview_action). chat-history re-renders from chat-messages via render_chat_transcript.
+    msgs = (messages or []) + [{"role": "assistant", "summary": result.get("chat_summary", "")}]
+    # Both the Artifacts and Governance-Trace stacks open the newest + collapse priors.
+    return (render_context_bar(result), msgs, new_history, collapsed, collapsed, no_update, preview)
 
 
 @app.callback(
-    Output("chat-echo", "children"),
+    Output("tab-artifacts", "children"),
+    Input("artifacts-history", "data"),
+    Input("artifacts-collapsed", "data"),
+)
+def render_history(history, collapsed):
+    """Render the Artifacts tab as the accumulated history stack (newest first, collapsible)."""
+    return render_artifact_history(history or [], collapsed or [])
+
+
+@app.callback(
+    Output("tab-trace", "children"),
+    Input("artifacts-history", "data"),
+    Input("trace-collapsed", "data"),
+)
+def render_trace(history, collapsed):
+    """Render the Governance Trace tab as a history stack over the SAME per-answer results (model tool
+    plan + full deterministic tool trace + scoped SQL), newest first, collapsible."""
+    return render_trace_history(history or [], collapsed or [])
+
+
+@app.callback(
+    Output("artifacts-collapsed", "data", allow_duplicate=True),
+    Input({"type": "arti-hdr", "n": ALL}, "n_clicks"),
+    State("artifacts-collapsed", "data"),
+    prevent_initial_call=True,
+)
+def toggle_artifact_card(_clicks, collapsed):
+    """Collapse/expand one history card when its header is clicked (dynamically-created buttons fire on
+    creation with n_clicks=0 - guard on the fired value so a real click is required)."""
+    trig = ctx.triggered_id
+    if not trig or not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
+    n = trig.get("n")
+    s = set(collapsed or [])
+    s.discard(n) if n in s else s.add(n)
+    return list(s)
+
+
+@app.callback(
+    Output("trace-collapsed", "data", allow_duplicate=True),
+    Input({"type": "trace-hdr", "n": ALL}, "n_clicks"),
+    State("trace-collapsed", "data"),
+    prevent_initial_call=True,
+)
+def toggle_trace_card(_clicks, collapsed):
+    """Collapse/expand one governance-trace card independently of the Artifacts stack."""
+    trig = ctx.triggered_id
+    if not trig or not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
+    n = trig.get("n")
+    s = set(collapsed or [])
+    s.discard(n) if n in s else s.add(n)
+    return list(s)
+
+
+@app.callback(
+    Output("chat-messages", "data"),
     Output("asset-dropdown", "value", allow_duplicate=True),
     Output("time-window", "value", allow_duplicate=True),
     Output("review-type", "value", allow_duplicate=True),
     Output("chat-question", "data"),
     Output("chat-artifacts", "data"),
+    Output("chat-input", "value"),  # clear the input after Ask (blank box, standard chat UX)
     Input("chat-send", "n_clicks"),
     Input("chat-input", "n_submit"),
     State("chat-input", "value"),
     State("session-id", "data"),
+    State("chat-messages", "data"),
     prevent_initial_call=True,
 )
-def on_chat(_clicks, _submit, text, session_id):
+def on_chat(_clicks, _submit, text, session_id, messages):
     text = (text or "").strip()
     if not text:
-        return no_update, no_update, no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update
     # Show the "MAX is thinking" indicator immediately (before the run starts).
     _prog_start(session_id or "ui")
     # Finance-style entity extraction: the model reads the chat and proposes typed entities that scope
@@ -227,8 +380,32 @@ def on_chat(_clicks, _submit, text, session_id):
     eid = ent.get("equipment_id")
     tw = ent.get("time_window") or no_update
     rt = ent.get("review_type") or no_update
-    bubble = render_user_bubble(text)
-    return bubble, (eid or no_update), tw, rt, text, ent.get("artifacts") or []
+    # Append the user's question so the transcript accumulates (Finance-agent pattern); on_context then
+    # appends MAX's answer. The box is cleared ("") and chat-question triggers the governed run.
+    msgs = (messages or []) + [{"role": "user", "content": text}]
+    return msgs, (eid or no_update), tw, rt, text, ent.get("artifacts") or [], ""  # "" clears chat-input
+
+
+# Re-render the whole Ask MAX transcript whenever the message store changes (Finance-agent pattern):
+# on_chat / on_preview_action append the user turn and on_context appends MAX's answer, so past Q&A
+# stay stacked (oldest -> newest) instead of overwriting a single slot.
+@app.callback(
+    Output("chat-history", "children"),
+    Input("chat-messages", "data"),
+)
+def render_chat_transcript(messages):
+    return render_transcript(messages or [])
+
+
+# Auto-scroll the transcript to the newest turn on every append (like Claude / ChatGPT). Clientside so
+# there is no server round-trip; the small delay lets Dash paint the new bubble before we scroll.
+app.clientside_callback(
+    "function(_m){ setTimeout(function(){ var el = document.getElementById('chat-scroll');"
+    " if (el) { el.scrollTop = el.scrollHeight; } }, 60); return ''; }",
+    Output("chat-scroll-anchor", "children"),
+    Input("chat-messages", "data"),
+    prevent_initial_call=True,
+)
 
 
 # --- Command Center interactions ----------------------------------------------
@@ -249,29 +426,32 @@ def on_queue_click(active_cell, data):
     eid = data[row].get("equipment_id")
     if active_cell.get("column_id") in ("equipment_id", "pm_id"):
         return no_update, eid, "studio"  # asset / PM name -> Work Strategy Studio directly
-    return render_pm_preview(agent.run(eid)), eid, no_update  # row body -> PM preview slide-over
+    result = agent.run(eid)  # row body -> PM preview slide-over with MAX's concise assessment paragraph
+    return render_pm_preview(result, narrative=agent.preview_narrative(result, concise=True)), eid, no_update
 
 
 @app.callback(
     Output("workspace", "data", allow_duplicate=True),
     Output("cc-preview", "children", allow_duplicate=True),
     Output("chat-question", "data", allow_duplicate=True),
-    Output("chat-echo", "children", allow_duplicate=True),
+    Output("chat-messages", "data", allow_duplicate=True),
     Input("cc-ask-btn", "n_clicks"),
     Input("cc-studio-btn", "n_clicks"),
     Input("cc-preview-close", "n_clicks"),
     State("asset-dropdown", "value"),
     State("session-id", "data"),
+    State("chat-messages", "data"),
     prevent_initial_call=True,
 )
-def on_preview_action(ask, studio, close, asset, session_id):
+def on_preview_action(ask, studio, close, asset, session_id, messages):
     trig = ctx.triggered_id
     # Guard on n_clicks so the dynamically-created buttons don't fire on creation (n_clicks=0).
     if trig == "cc-ask-btn" and ask:
         # Land in Ask MAX with a governed starter question already asked for this PM.
         q = f"Is the PM on {asset} effective, and should anything change?"
         _prog_start(session_id or "ui")
-        return "ask", no_update, q, render_user_bubble(q)
+        msgs = (messages or []) + [{"role": "user", "content": q}]
+        return "ask", no_update, q, msgs
     if trig == "cc-studio-btn" and studio:
         return "studio", no_update, no_update, no_update
     if trig == "cc-preview-close" and close:
@@ -306,40 +486,56 @@ def on_priority(*args):
 
 
 @app.callback(
-    Output("approval-audit", "data"),
-    Input("approve-btn", "n_clicks"),
-    Input("request-btn", "n_clicks"),
-    Input("reject-btn", "n_clicks"),
-    State("approval-comment", "value"),
-    State("asset-dropdown", "value"),
+    Output("studio-body", "children"),
+    Input("workspace", "data"),
+    Input("asset-dropdown", "value"),
+    Input("time-window", "value"),
+    Input("review-type", "value"),
     State("approval-audit", "data"),
     prevent_initial_call=True,
 )
-def on_approval(_a, _r, _j, comment, equipment_id, audit):
-    mapping = {
-        "approve-btn": ("APPROVE", "ANALYST_REVIEWED"),
-        "request-btn": ("REQUEST_CHANGES", "REQUEST_CHANGES"),
-        "reject-btn": ("REJECT", "REJECTED"),
-    }
-    trig = mapping.get(ctx.triggered_id)
-    if not trig:
+def on_studio(workspace, equipment_id, time_window, review_type, audit):
+    """Fill the Work Strategy Studio for the selected scope. Studio is standalone: its own Asset / Time
+    window / Review type filters drive the governed review directly (a Command Center drill-in or a chat
+    just set the same shared dropdowns). Renders only when Studio is on screen so the run/narrative cost
+    is not paid while browsing another workspace."""
+    if workspace != "studio":
         return no_update
-    action, transition = trig
-    actor = _current_actor()
+    if not equipment_id:
+        return render_studio(None)
+    result = agent.run(equipment_id, actor=_current_actor(), time_window=time_window, review_type=review_type)
+    return render_studio(result, audit=audit or [], narrative=agent.preview_narrative(result))
 
-    # A click is NOT authorization. Route it through the deterministic approval tool.
+
+# (inline button type -> UI action label, canonical workflow transition).
+_INLINE_APPROVAL_MAP = {
+    "ff-approve": ("APPROVE", "ANALYST_REVIEWED"),
+    "ff-request": ("REQUEST_CHANGES", "CHANGES_REQUESTED"),
+    "ff-reject": ("REJECT", "REJECTED"),
+}
+
+
+def _run_approval_action(equipment_id, action, transition, comment, audit):
+    """Route an approval click through the deterministic approval_workflow_state tool (a click is NOT
+    authorization). Returns (new_audit, entry, authorized). Shared by the Studio buttons (on_approval) and
+    the inline chat buttons (on_inline_approval). Draft-only; MAX never writes SAP."""
+    from datetime import datetime, timezone
+
     from max_agent.tools import approval_workflow_state
+    actor = _current_actor()
     asset = agent._fleet_index.get(equipment_id, {})
     r = agent.run(equipment_id)
     wf = approval_workflow_state(
         package_id=f"PKG-{equipment_id}", current_state="DRAFT", requested_transition=transition,
-        actor=actor, gate_status=r.get("gate_status"),
+        # The package drafts MAX's RECOMMENDATION, so the approval follows the recommendation's gate
+        # (package_gate_status), NOT the change-under-review gate. Binding to the change gate FAILS OPEN
+        # when it is more permissive than the package gate (e.g. PUMP-4102: change PASS vs package
+        # REVIEW_REQUIRED). The fallback covers the out-of-scope path where the two gates are equal.
+        actor=actor, gate_status=r.get("package_gate_status") or r.get("gate_status"),
         readiness=asset.get("readiness", {}), approval_state=asset.get("approval_state", {}),
         creator_user_id="analyst-09",
     ).get("data", {})
     authorized = bool(wf.get("transition_allowed"))
-
-    from datetime import datetime, timezone
     entry = {
         "equipment_id": equipment_id, "action": action, "actor": actor.get("user_id"),
         "comment": (comment or "").strip(),
@@ -348,7 +544,113 @@ def on_approval(_a, _r, _j, comment, equipment_id, audit):
         "role_verified": bool(wf.get("role_verified")),
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
-    return (audit or []) + [entry]
+    return (audit or []) + [entry], entry, authorized
+
+
+@app.callback(
+    Output("approval-audit", "data"),
+    Output("approval-trail", "children"),
+    Input("approve-btn", "n_clicks"),
+    Input("request-btn", "n_clicks"),
+    Input("reject-btn", "n_clicks"),
+    State("approval-comment", "value"),
+    State("asset-dropdown", "value"),
+    State("approval-audit", "data"),
+    prevent_initial_call=True,
+)
+def on_approval(a, r_, j, comment, equipment_id, audit):
+    mapping = {
+        "approve-btn": ("APPROVE", "ANALYST_REVIEWED"),
+        # (UI action label, canonical workflow transition). "Request changes" drives the
+        # CHANGES_REQUESTED state; the label REQUEST_CHANGES keys the audit badge colour.
+        "request-btn": ("REQUEST_CHANGES", "CHANGES_REQUESTED"),
+        "reject-btn": ("REJECT", "REJECTED"),
+    }
+    trig = mapping.get(ctx.triggered_id)
+    # Guard on n_clicks so the buttons don't fire on creation (studio re-render gives them n_clicks=0).
+    if not trig or not {"approve-btn": a, "request-btn": r_, "reject-btn": j}.get(ctx.triggered_id):
+        return no_update, no_update
+    action, transition = trig
+    new_audit, _entry, _auth = _run_approval_action(equipment_id, action, transition, comment, audit)
+    # Refresh the trail in place so the reviewer sees the governed outcome without a full Studio re-render.
+    return new_audit, _audit_trail(new_audit, equipment_id)
+
+
+@app.callback(
+    Output("chat-messages", "data", allow_duplicate=True),
+    Output("approval-audit", "data", allow_duplicate=True),
+    Input({"type": "ff-approve", "key": ALL}, "n_clicks"),
+    Input({"type": "ff-request", "key": ALL}, "n_clicks"),
+    Input({"type": "ff-reject", "key": ALL}, "n_clicks"),
+    State("chat-messages", "data"),
+    State("approval-audit", "data"),
+    prevent_initial_call=True,
+)
+def on_inline_approval(_a, _r, _j, messages, audit):
+    """Inline chat approve/reject: the human clicks a button MAX surfaced in the transcript. A click is
+    NOT authorization - it routes through _run_approval_action (approval_workflow_state: role + gate +
+    self-approval + audit) and records the outcome as a chat turn + an audit entry. Draft-only; never SAP."""
+    trig = ctx.triggered_id
+    if not isinstance(trig, dict) or trig.get("type") not in _INLINE_APPROVAL_MAP:
+        return no_update, no_update
+    # Fire only on a real click (n_clicks truthy), not on a transcript re-render.
+    if not any((t or {}).get("value") for t in (ctx.triggered or [])):
+        return no_update, no_update
+    key = trig.get("key")
+    msgs = messages or []
+    eid = None
+    if isinstance(key, int) and 0 <= key < len(msgs) and msgs[key].get("kind") == "approval":
+        eid = msgs[key].get("equipment_id")
+    if not eid:
+        return no_update, no_update
+    action, transition = _INLINE_APPROVAL_MAP[trig["type"]]
+    new_audit, entry, authorized = _run_approval_action(eid, action, transition, "", audit)
+    outcome = (f"Recorded: **{action}** on {eid} - {'AUTHORIZED' if authorized else 'DENIED'}"
+               + (f" ({entry['reason']})" if entry.get("reason") else "")
+               + ". Draft-only; MAX did not write SAP.")
+    return msgs + [{"role": "assistant", "summary": outcome}], new_audit
+
+
+@app.callback(
+    Output({"type": "detail-body", "art": MATCH}, "children"),
+    Output({"type": "detail-status", "art": MATCH}, "children"),
+    Input({"type": "detail-filter", "art": MATCH, "col": ALL}, "value"),
+    State({"type": "detail-filter", "art": MATCH, "col": ALL}, "id"),
+    State({"type": "detail-store", "art": MATCH}, "data"),
+    prevent_initial_call=True,
+)
+def on_detail_filter(values, ids, store):
+    """Re-render ONE detail table's body from its per-column filter inputs (MATCH keys it to that table
+    only). Filters are case-insensitive substrings, AND-ed across columns. The rows live in the table's
+    own dcc.Store, so filtering never re-runs the pipeline or the LLM."""
+    from max_agent.ui.artifact_catalog import _build_detail_body, _filter_rows
+    if not store:
+        return no_update, no_update
+    filt = {i["col"]: v for i, v in zip(ids or [], values or []) if v}
+    rows, columns = store.get("rows", []), store.get("columns", [])
+    filtered = _filter_rows(rows, filt)
+    status = f"{len(filtered)} of {len(rows)} record(s)" + (f" match {len(filt)} filter(s)" if filt else "")
+    return _build_detail_body(filtered, columns), status
+
+
+@app.callback(
+    Output({"type": "detail-download", "art": MATCH}, "data"),
+    Input({"type": "detail-download-btn", "art": MATCH}, "n_clicks"),
+    State({"type": "detail-filter", "art": MATCH, "col": ALL}, "value"),
+    State({"type": "detail-filter", "art": MATCH, "col": ALL}, "id"),
+    State({"type": "detail-store", "art": MATCH}, "data"),
+    prevent_initial_call=True,
+)
+def on_detail_download(n, values, ids, store):
+    """Export the CURRENTLY FILTERED rows of this table as CSV (what you see is what you download)."""
+    if not n or not store:
+        return no_update
+    from max_agent.ui.artifact_catalog import _detail_csv, _filter_rows
+    filt = {i["col"]: v for i, v in zip(ids or [], values or []) if v}
+    rows = _filter_rows(store.get("rows", []), filt)
+    art = (ctx.triggered_id or {}).get("art", "detail")
+    suffix = "-filtered" if filt else ""
+    return dcc.send_string(_detail_csv(store.get("columns", []), store.get("labels", {}), rows), f"{art}{suffix}.csv")
 
 
 if __name__ == "__main__":

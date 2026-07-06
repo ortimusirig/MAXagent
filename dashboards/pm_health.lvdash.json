@@ -1,0 +1,130 @@
+{
+  "datasets": [
+    {
+      "name": "ds_pm_health",
+      "displayName": "pm_health",
+      "queryLines": [
+        "SELECT equipment_id, asset_class, criticality, label, gate_status,\n",
+        "       data_readiness, do_not_optimize, next_action, reason, provenance\n",
+        "FROM supplychain.max_agent.pm_health"
+      ]
+    },
+    {
+      "name": "ds_kpis",
+      "displayName": "kpis",
+      "queryLines": [
+        "SELECT COUNT(*) AS total,\n",
+        "       COUNT_IF(gate_status = 'BLOCKED') AS blocked,\n",
+        "       COUNT_IF(gate_status = 'REVIEW_REQUIRED') AS review_required,\n",
+        "       COUNT_IF(gate_status = 'DRAFT_ONLY') AS draft_only,\n",
+        "       COUNT_IF(gate_status = 'PASS') AS pass_ct,\n",
+        "       COUNT_IF(do_not_optimize) AS do_not_optimize\n",
+        "FROM supplychain.max_agent.pm_health"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "page_overview",
+      "displayName": "PM Health",
+      "layout": [
+        {
+          "widget": {
+            "name": "kpi_total",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpis", "fields": [{"name": "total", "expression": "SUM(`total`)"}], "disaggregated": false}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "total", "displayName": "Total PMs"}}, "frame": {"showTitle": true, "title": "Total PMs"}}
+          },
+          "position": {"x": 0, "y": 0, "width": 1, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi_blocked",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpis", "fields": [{"name": "blocked", "expression": "SUM(`blocked`)"}], "disaggregated": false}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "blocked", "displayName": "Blocked"}}, "frame": {"showTitle": true, "title": "Blocked"}}
+          },
+          "position": {"x": 1, "y": 0, "width": 1, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi_review",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpis", "fields": [{"name": "review_required", "expression": "SUM(`review_required`)"}], "disaggregated": false}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "review_required", "displayName": "Review required"}}, "frame": {"showTitle": true, "title": "Review required"}}
+          },
+          "position": {"x": 2, "y": 0, "width": 1, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi_draft",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpis", "fields": [{"name": "draft_only", "expression": "SUM(`draft_only`)"}], "disaggregated": false}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "draft_only", "displayName": "Draft only"}}, "frame": {"showTitle": true, "title": "Draft only"}}
+          },
+          "position": {"x": 3, "y": 0, "width": 1, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi_pass",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpis", "fields": [{"name": "pass_ct", "expression": "SUM(`pass_ct`)"}], "disaggregated": false}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "pass_ct", "displayName": "Pass"}}, "frame": {"showTitle": true, "title": "Pass"}}
+          },
+          "position": {"x": 4, "y": 0, "width": 1, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "kpi_dno",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_kpis", "fields": [{"name": "do_not_optimize", "expression": "SUM(`do_not_optimize`)"}], "disaggregated": false}}],
+            "spec": {"version": 2, "widgetType": "counter", "encodings": {"value": {"fieldName": "do_not_optimize", "displayName": "Do-not-optimize"}}, "frame": {"showTitle": true, "title": "Do-not-optimize"}}
+          },
+          "position": {"x": 5, "y": 0, "width": 1, "height": 3}
+        },
+        {
+          "widget": {
+            "name": "bar_gate",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_pm_health", "fields": [{"name": "gate_status", "expression": "`gate_status`"}, {"name": "count", "expression": "COUNT(`*`)"}], "disaggregated": false}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "gate_status", "scale": {"type": "categorical"}, "displayName": "Gate status"}, "y": {"fieldName": "count", "scale": {"type": "quantitative"}, "displayName": "Assets"}}, "frame": {"showTitle": true, "title": "Gate outcomes across the fleet"}}
+          },
+          "position": {"x": 0, "y": 3, "width": 2, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "bar_criticality",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_pm_health", "fields": [{"name": "criticality", "expression": "`criticality`"}, {"name": "count", "expression": "COUNT(`*`)"}], "disaggregated": false}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "criticality", "scale": {"type": "categorical"}, "displayName": "ABC criticality"}, "y": {"fieldName": "count", "scale": {"type": "quantitative"}, "displayName": "Assets"}}, "frame": {"showTitle": true, "title": "Criticality distribution"}}
+          },
+          "position": {"x": 2, "y": 3, "width": 2, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "bar_label",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_pm_health", "fields": [{"name": "label", "expression": "`label`"}, {"name": "count", "expression": "COUNT(`*`)"}], "disaggregated": false}}],
+            "spec": {"version": 3, "widgetType": "bar", "encodings": {"x": {"fieldName": "label", "scale": {"type": "categorical"}, "displayName": "Effectiveness label"}, "y": {"fieldName": "count", "scale": {"type": "quantitative"}, "displayName": "Assets"}}, "frame": {"showTitle": true, "title": "Effectiveness labels (describe-and-flag)"}}
+          },
+          "position": {"x": 4, "y": 3, "width": 2, "height": 6}
+        },
+        {
+          "widget": {
+            "name": "table_queue",
+            "queries": [{"name": "main_query", "query": {"datasetName": "ds_pm_health", "fields": [
+              {"name": "equipment_id", "expression": "`equipment_id`"},
+              {"name": "criticality", "expression": "`criticality`"},
+              {"name": "label", "expression": "`label`"},
+              {"name": "gate_status", "expression": "`gate_status`"},
+              {"name": "data_readiness", "expression": "`data_readiness`"},
+              {"name": "next_action", "expression": "`next_action`"},
+              {"name": "reason", "expression": "`reason`"}
+            ], "disaggregated": true}}],
+            "spec": {"version": 1, "widgetType": "table", "encodings": {"columns": [
+              {"fieldName": "equipment_id", "displayName": "Asset"},
+              {"fieldName": "criticality", "displayName": "Crit"},
+              {"fieldName": "label", "displayName": "Label"},
+              {"fieldName": "gate_status", "displayName": "Gate"},
+              {"fieldName": "data_readiness", "displayName": "Data readiness"},
+              {"fieldName": "next_action", "displayName": "Recommended next action"},
+              {"fieldName": "reason", "displayName": "Reason"}
+            ]}, "frame": {"showTitle": true, "title": "PM Health review queue (governed, draft-only)"}}
+          },
+          "position": {"x": 0, "y": 9, "width": 6, "height": 8}
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""MAX Agent single tool library - the canonical 24 tools.
+"""MAX Agent single tool library - the canonical 24 tools + 6 evidence extensions (30).
 
 Canonical tool names come from ``60 - MVP Scope and Design/07 - MAX Agent Single Tool Library``.
 Do not rename tools or mix aliases (e.g. use ``draft_sap_change_package``, never
@@ -6,6 +6,17 @@ Do not rename tools or mix aliases (e.g. use ``draft_sap_change_package``, never
 
 The safety-critical tools are deterministic and unit-tested (Wave A + governance). The Wave B/C/D
 tools aggregate or check readiness deterministically; none invents an Oxy value or claims savings.
+
+Tools 25-27 (reliability_metrics, weibull_reliability, failure_mode_summary) are a Wave-B reliability-
+EVIDENCE extension (60/07 extension): they compute reliability facts + a math-defensible interpretation
+that feeds the narration / recommendation rationale. Tool 28 (pm_bom_completeness) is a parts / BOM-
+completeness EVIDENCE extension: it compares this PM's linked components to like equipment and flags
+missing ones, which feeds the ADD_COMPONENT recommendation. Tools 29-30 (reliability_drift_monitor,
+sap_cost_distribution) are a SAP-transactional anomaly / drift EVIDENCE extension: they redesign the
+reference PdM agent's sensor-based anomaly detection onto Oxy's transactional SAP (failure timing,
+work-order mix, cost), flagging drift/outliers + a candidate recommendation TYPE. All six are EVIDENCE
+ONLY - they never change the classifier label or the gate, and every judgment threshold stays
+BU_DEFINED until Oxy confirms it.
 """
 
 # Context (2)
@@ -34,6 +45,12 @@ from .governance import oxy_gate_check, approval_workflow_state
 # Package and monitoring (3)
 from .package import draft_sap_change_package
 from .monitoring import trial_monitor, value_kpi_tracker
+# Reliability evidence (3) - Wave-B extension (tools 25-27), evidence-only
+from .reliability import reliability_metrics, weibull_reliability, failure_mode_summary
+# Parts / BOM-completeness evidence (1) - tool 28, evidence-only; feeds ADD_COMPONENT
+from .bom import pm_bom_completeness
+# SAP-transactional anomaly / drift evidence (2) - tools 29-30, evidence-only; flag candidate rec TYPE
+from .anomaly import reactive_share, reliability_drift_monitor, sap_cost_distribution
 
 # Canonical name -> callable. The full 24-tool library.
 MAX_AGENT_TOOL_LIBRARY = {
@@ -70,6 +87,15 @@ MAX_AGENT_TOOL_LIBRARY = {
     "draft_sap_change_package": draft_sap_change_package,
     "trial_monitor": trial_monitor,
     "value_kpi_tracker": value_kpi_tracker,
+    # reliability evidence (Wave-B extension, tools 25-27; evidence-only)
+    "reliability_metrics": reliability_metrics,
+    "weibull_reliability": weibull_reliability,
+    "failure_mode_summary": failure_mode_summary,
+    # parts / BOM-completeness evidence (tool 28; evidence-only, feeds ADD_COMPONENT)
+    "pm_bom_completeness": pm_bom_completeness,
+    # SAP-transactional anomaly / drift evidence (tools 29-30; evidence-only, flag candidate rec TYPE)
+    "reliability_drift_monitor": reliability_drift_monitor,
+    "sap_cost_distribution": sap_cost_distribution,
 }
 
 # The deterministic safety core (unit-tested subset), kept for callers that pin it.
@@ -82,6 +108,7 @@ MAX_AGENT_DETERMINISTIC_TOOLS = {
     )
 }
 
-assert len(MAX_AGENT_TOOL_LIBRARY) == 24, f"expected 24 tools, got {len(MAX_AGENT_TOOL_LIBRARY)}"
+assert len(MAX_AGENT_TOOL_LIBRARY) == 30, f"expected 30 tools (24 canonical + 3 reliability + 1 BOM + 2 anomaly), got {len(MAX_AGENT_TOOL_LIBRARY)}"
 
-__all__ = list(MAX_AGENT_TOOL_LIBRARY) + ["MAX_AGENT_TOOL_LIBRARY", "MAX_AGENT_DETERMINISTIC_TOOLS"]
+__all__ = list(MAX_AGENT_TOOL_LIBRARY) + ["MAX_AGENT_TOOL_LIBRARY", "MAX_AGENT_DETERMINISTIC_TOOLS",
+                                          "reactive_share"]

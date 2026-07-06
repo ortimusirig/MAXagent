@@ -158,6 +158,13 @@ def build_evidence_digest(result: Dict[str, Any]) -> Dict[str, Any]:
         claim = " so no labor-savings claim is defensible" if (labor in (0, 0.0, None)) else ""
         lines.append(f"Cost basis: {basis_txt}{claim}.")
 
+    bom = result.get("bom_completeness") or {}
+    if bom.get("computable") and bom.get("bom_completeness") == "GAPS":
+        miss = ", ".join(bom.get("components_missing") or [])
+        lines.append(
+            f"Spare parts / BOM: this PM links {len(bom.get('components_linked') or [])} of "
+            f"{len(bom.get('components_expected') or [])} components like equipment carry; missing {miss}.")
+
     return {
         "work_orders_total": total,
         "work_orders_by_type": by_type,

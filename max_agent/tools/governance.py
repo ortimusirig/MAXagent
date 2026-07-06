@@ -568,6 +568,10 @@ _TRANSITIONS: Dict[tuple, Dict[str, Any]] = {
         "roles": {"mdc_bpdo"},
         "beyond_draft": True,
     },
+    # A first-line reviewer may bounce a DRAFT package (request changes / reject) before it advances,
+    # so the Studio Request-changes / Reject buttons are real transitions, not silent denials.
+    (STATE_DRAFT, STATE_CHANGES_REQUESTED): {"roles": {"planner_scheduler", "work_management_engineer"}},
+    (STATE_DRAFT, STATE_REJECTED): {"roles": {"planner_scheduler", "work_management_engineer"}},
     (STATE_ANALYST_REVIEWED, STATE_CHANGES_REQUESTED): {"roles": {"planner_scheduler", "work_management_engineer"}},
     (STATE_SME_REVIEWED, STATE_CHANGES_REQUESTED): {"roles": {"equipment_sme", "work_management_engineer"}},
     (STATE_ANALYST_REVIEWED, STATE_REJECTED): {"roles": {"planner_scheduler", "work_management_engineer"}},

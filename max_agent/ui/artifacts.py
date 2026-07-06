@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from dash import dash_table, dcc, html
 
+from ..labels import change_label, gate_label, rec_label
 from .charts import criticality_figure, data_readiness_figure, gate_status_figure
 from .theme import CARD, COLORS, H2, LABEL_COLORS, MUTED, RAG_COLORS, STATUS_COLORS
 
@@ -76,6 +77,33 @@ def render_context_bar(r: Dict[str, Any]) -> html.Div:
         _chip("Scope", scope_note),
     ]
     return html.Div(chips, style={"padding": "10px 22px", "borderBottom": f"1px solid {COLORS['line']}", "background": "#fbfdff"})
+
+
+# --- MAX synthesis block (shared by the Work Strategy Studio + the Command Center preview) ----------
+def render_why(r: Dict[str, Any], narrative: str = None, heading: str = "Why MAX recommended this") -> html.Div:
+    """The governed MAX synthesis: the narrative paragraph + the evidence it cited + the required
+    approvers. Rendered IDENTICALLY in the Studio 'Why MAX recommended this' section and the Command
+    Center PM preview so both read the same. Narrative renders via dcc.Markdown (LLM inline emphasis
+    shows); falls back to the deterministic paragraph when none is supplied."""
+    if narrative is None:
+        from ..prompts import preview_summary
+        narrative = preview_summary(r)
+    lines = (r.get("evidence_digest") or {}).get("lines") or []
+    approvers = r.get("required_approvers") or []
+    kids: List[Any] = [html.Div(heading, style=H2)]
+    if narrative:
+        kids.append(dcc.Markdown(narrative, className="max-narrative",
+                                 style={"fontSize": "13px", "color": COLORS["ink"], "lineHeight": "1.6", "marginBottom": "10px"}))
+    if lines:
+        kids.append(html.Div("Evidence MAX cited", style={"fontSize": "12px", "fontWeight": 700, "color": COLORS["muted"], "marginBottom": "4px"}))
+        kids.append(html.Ul([html.Li(l, style={"fontSize": "13px", "margin": "2px 0", "color": COLORS["ink"]}) for l in lines],
+                            style={"margin": "2px 0 10px", "paddingLeft": "18px"}))
+    kids.append(html.Div([
+        html.Span("Required approvers: ", style={"fontWeight": 700, "fontSize": "12px", "color": COLORS["ink"]}),
+        html.Span(", ".join(approvers) if approvers else "none named yet (Oxy to confirm)",
+                  style={"fontSize": "12px", "color": COLORS["muted"]}),
+    ]))
+    return html.Div(kids)
 
 
 # --- Conversation tool pills (60/04) ----------------------------------------
@@ -154,15 +182,16 @@ def render_decision(r: Dict[str, Any]) -> html.Div:
         ], style=CARD),
         html.Div([
             html.Div("Change under review vs MAX recommendation", style=H2),
-            _kv("Change under review (gated + packaged)", r.get("change_under_review_type")),
+            _kv("Change under review (gated)", r.get("change_under_review_type")),
             _kv("  gated as", r.get("gate_status")),
-            _kv("MAX recommendation", r.get("recommendation_type")),
+            _kv("MAX recommendation (packaged)", r.get("recommendation_type")),
             _kv("  gated as", r.get("recommendation_gate_status")),
             _kv("Rationale", r.get("recommendation_rationale")),
             _kv("Next action", r.get("recommendation_next_action")),
             html.Div(
                 "MAX's recommendation differs from the change under review: MAX advises the recommendation above, "
-                "and it is gate-checked separately. The SAP Package drafts the change under review.",
+                "and it is gate-checked separately. The SAP Package drafts MAX's recommendation (not the change "
+                "under review), gated by the recommendation's own gate.",
                 style={"background": "#fff4e5", "border": "1px solid #f0c987", "borderRadius": "8px",
                        "padding": "8px", "fontSize": "12px", "color": "#8a5a00", "marginTop": "6px"},
             ) if r.get("recommendation_diverges") else html.Div(),
@@ -417,6 +446,14 @@ def render_comparison(r: Dict[str, Any]) -> html.Div:
 
 
 # --- SAP Package (+ governed approve/reject/request-change) ------------------
+_ACTION_LABELS = {
+    "APPROVE": "Mark reviewed",
+    "CHANGES_REQUESTED": "Request changes",
+    "REQUEST_CHANGES": "Request changes",
+    "REJECT": "Reject",
+}
+
+
 def _audit_trail(audit: List[Dict[str, Any]], equipment_id: str) -> html.Div:
     entries = [a for a in (audit or []) if a.get("equipment_id") == equipment_id]
     if not entries:
@@ -428,13 +465,45 @@ def _audit_trail(audit: List[Dict[str, Any]], equipment_id: str) -> html.Div:
         detail = e.get("reason") or e.get("comment") or ""
         rows.append([
             e.get("timestamp"), e.get("actor"),
-            badge(e.get("action"), {"REJECT": "#b42318", "REQUEST_CHANGES": "#b7791f"}.get(e.get("action"), "#0b5cab")),
+            badge(_ACTION_LABELS.get(e.get("action"), e.get("action")),
+                  {"REJECT": "#b42318", "REQUEST_CHANGES": "#b7791f", "CHANGES_REQUESTED": "#b7791f"}.get(e.get("action"), "#0b5cab")),
             outcome_cell, detail,
         ])
     return _table(["When", "Actor", "Action", "Outcome", "Reason / comment"], rows)
 
 
-def render_sap_package(r: Dict[str, Any], audit: List[Dict[str, Any]] = None) -> html.Div:
+def render_governed_action(r: Dict[str, Any], audit: List[Dict[str, Any]] = None) -> html.Div:
+    """The governed approve / request-changes / reject controls + the session audit trail.
+
+    A click is never authorization: the buttons only *request* a transition; app.on_approval routes it
+    through the deterministic approval_workflow_state tool, which decides AUTHORIZED/DENIED on role +
+    gate. Approve is pre-disabled only when the package cannot enter the approval path (BLOCKED /
+    DRAFT_ONLY); a REVIEW_REQUIRED package CAN be analyst-reviewed, so its click reaches the tool."""
+    p = r.get("package", {})
+    gate = r.get("gate_status")
+    # Gate the approve/review button on the package's OWN approval-path flag (PASS or REVIEW_REQUIRED),
+    # not the stricter submit path (PASS only): "Mark reviewed / approve" drives DRAFT -> ANALYST_REVIEWED,
+    # a review step the workflow tool allows for REVIEW_REQUIRED. The tool still makes the final call.
+    approve_ok = bool(p.get("approval_path_available"))
+    btn = {"border": "none", "borderRadius": "8px", "padding": "8px 14px", "marginRight": "8px", "fontWeight": 700, "fontSize": "13px", "cursor": "pointer", "color": "white"}
+    return html.Div([
+        html.Div("Governed action (draft-only; recorded to the session audit trail; never writes SAP)", style=H2),
+        dcc.Textarea(id="approval-comment", placeholder="Reviewer comment (optional)", style={"width": "100%", "height": "48px", "marginBottom": "8px", "fontFamily": "inherit", "fontSize": "13px"}),
+        html.Div([
+            html.Button("Mark reviewed / approve", id="approve-btn", n_clicks=0, disabled=not approve_ok, style={**btn, "background": "#1a7f37" if approve_ok else COLORS["muted"]}),
+            html.Button("Request changes", id="request-btn", n_clicks=0, style={**btn, "background": "#b7791f"}),
+            html.Button("Reject", id="reject-btn", n_clicks=0, style={**btn, "background": "#b42318"}),
+        ]),
+        html.Div(
+            "Approval path available (review may proceed)" if approve_ok else f"Approval path unavailable for gate={gate} (remediate or request changes).",
+            style={**MUTED, "marginTop": "6px"},
+        ),
+        html.Div("Session audit trail (Wave 1)", style={**H2, "marginTop": "14px"}),
+        html.Div(id="approval-trail", children=_audit_trail(audit, r.get("equipment_id"))),
+    ], style=CARD)
+
+
+def render_sap_package(r: Dict[str, Any], audit: List[Dict[str, Any]] = None, with_controls: bool = True) -> html.Div:
     p = r.get("package", {})
     ak = p.get("attachment_k", {})
     deferred = p.get("deferred_fields", [])
@@ -442,25 +511,9 @@ def render_sap_package(r: Dict[str, Any], audit: List[Dict[str, Any]] = None) ->
     pv = p.get("proposed_value")
     cv = cv.get("value") if isinstance(cv, dict) else cv
     pv = pv.get("value") if isinstance(pv, dict) else pv
-    gate = r.get("gate_status")
-    submit_ok = bool(p.get("submit_path_available")) and gate not in ("BLOCKED",)
-
-    btn = {"border": "none", "borderRadius": "8px", "padding": "8px 14px", "marginRight": "8px", "fontWeight": 700, "fontSize": "13px", "cursor": "pointer", "color": "white"}
-    controls = html.Div([
-        html.Div("Governed action (draft-only; recorded to the session audit trail; never writes SAP)", style=H2),
-        dcc.Textarea(id="approval-comment", placeholder="Reviewer comment (optional)", style={"width": "100%", "height": "48px", "marginBottom": "8px", "fontFamily": "inherit", "fontSize": "13px"}),
-        html.Div([
-            html.Button("Mark reviewed / approve", id="approve-btn", n_clicks=0, disabled=not submit_ok, style={**btn, "background": "#1a7f37" if submit_ok else COLORS["muted"]}),
-            html.Button("Request changes", id="request-btn", n_clicks=0, style={**btn, "background": "#b7791f"}),
-            html.Button("Reject", id="reject-btn", n_clicks=0, style={**btn, "background": "#b42318"}),
-        ]),
-        html.Div(
-            "Submit path available" if submit_ok else f"Submit path unavailable for gate={gate} (draft stays in review).",
-            style={**MUTED, "marginTop": "6px"},
-        ),
-        html.Div("Governed action (Wave 1)", style={**H2, "marginTop": "14px"}),
-        html.Div(id="approval-trail", children=_audit_trail(audit, r.get("equipment_id"))),
-    ], style=CARD)
+    # In the Studio the governed controls are shown separately (above the collapsible package details),
+    # so callers can omit them here to avoid duplicate approve/reject button ids on one screen.
+    controls = render_governed_action(r, audit) if with_controls else html.Div()
 
     return html.Div([
         html.Div([
@@ -468,9 +521,9 @@ def render_sap_package(r: Dict[str, Any], audit: List[Dict[str, Any]] = None) ->
                      style={"background": "#fff4e5", "border": "1px solid #f0c987", "borderRadius": "8px", "padding": "10px", "fontSize": "13px", "color": "#8a5a00", "marginBottom": "12px"}),
             html.Div([
                 html.Span("This package drafts MAX's recommendation: ", style={"fontWeight": 600, "fontSize": "13px", "color": COLORS["ink"]}),
-                html.Span(f"{r.get('recommendation_type')} ", style={"fontSize": "13px", "color": COLORS["ink"], "fontWeight": 700}),
+                html.Span(f"{rec_label(r.get('recommendation_type'))} ", style={"fontSize": "13px", "color": COLORS["ink"], "fontWeight": 700}),
                 badge(r.get("package_gate_status"), STATUS_COLORS.get(r.get("package_gate_status"), COLORS["muted"])),
-                html.Div(f"Change you asked about: {r.get('change_under_review_type')} - gated as {r.get('gate_status')}."
+                html.Div(f"Change you asked about: {change_label(r.get('change_under_review_type'))} - gated as {gate_label(r.get('gate_status'))}."
                          + (" (MAX recommends the above instead.)" if r.get("recommendation_diverges") else ""),
                          style={**MUTED, "marginTop": "4px"}),
             ], style={"marginBottom": "10px"}),
@@ -522,20 +575,80 @@ def render_tool_trace(r: Dict[str, Any]) -> html.Div:
             str(detail)[:60],
             t.get("summary"),
         ])
-    llm_plan = r.get("llm_plan")
-    plan_block = html.Div()
-    if llm_plan:
-        plan_block = html.Div([
-            html.Div("LLM-planned tool sequence (Sonnet selected and sequenced these; mandatory ones enforced)",
-                     style={**MUTED, "marginTop": "8px"}),
-            html.Div(" -> ".join(str(p) for p in llm_plan),
-                     style={"fontSize": "12px", "color": COLORS["oxy"], "fontWeight": 600, "marginBottom": "6px"}),
-        ])
+    # The governed decision is fully deterministic (the LLM only narrates), so there is no LLM tool-plan
+    # to show here - only the deterministic pipeline trace.
     return html.Div([
         html.Div([
             html.Div("Tool Trace (deterministic pipeline)", style=H2),
             html.Div(f"Databricks mode: {r.get('databricks_mode')}  |  {ctx}", style=MUTED),
-            plan_block,
             _table(["Tool", "Status", "Conf", "Reason", "Detail (SQL / template / gate)", "Summary"], rows),
         ], style=CARD),
     ])
+
+
+# --- Governance Trace (dedicated tab): EVERYTHING that ran for the governed decision ----------------
+def _governance_summary(r: Dict[str, Any]) -> html.Div:
+    scope = r.get("scope") or {}
+    in_scope = "in scope" if scope.get("in_scope") else f"OUT OF SCOPE ({scope.get('blocked_reason') or '-'})"
+    gate = r.get("gate_status")
+    return html.Div([
+        html.Div("Governance summary", style=H2),
+        html.Div([html.Span("Gate  ", style={"color": COLORS["muted"], "fontSize": "12px"}),
+                  badge(gate, STATUS_COLORS.get(gate, COLORS["muted"]))]),
+        _kv("Gate reason", r.get("gate_reason") or r.get("gate_review_trigger") or "-"),
+        _kv("Effectiveness label", r.get("classifier_label")),
+        _kv("Recommendation", f"{r.get('recommendation_type')} (gate {r.get('recommendation_gate_status')})"),
+        _kv("Required approvers", ", ".join(r.get("required_approvers") or []) or "none named yet"),
+        _kv("Scope", in_scope),
+        _kv("Provenance / orchestration / mode",
+            f"{r.get('provenance')} / {r.get('orchestration_mode') or 'deterministic'} / {r.get('databricks_mode')}"),
+        html.Div("Draft-only (Wave 1): MAX does not write SAP; the deterministic tools decide, a human approves.", style=MUTED),
+    ], style=CARD)
+
+
+def _scoped_sql_card(r: Dict[str, Any]) -> html.Div:
+    from ..sql_templates import TEMPLATES, render_sql
+    code = {"fontFamily": "ui-monospace, Menlo, Consolas, monospace", "fontSize": "12px", "whiteSpace": "pre",
+            "background": "#0b2033", "color": "#d6e6f5", "padding": "10px 12px", "borderRadius": "8px",
+            "overflowX": "auto", "margin": "4px 0 2px"}
+    blocks, seen = [], set()
+    for t in r.get("tool_trace", []):
+        d = t.get("data", {}) or {}
+        tmpl = d.get("template_name")
+        gen = d.get("generated_sql")
+        preds = d.get("scope_predicates") or d.get("referenced_relations") or []
+        if tmpl and tmpl in TEMPLATES and tmpl not in seen:
+            seen.add(tmpl)
+            try:
+                sql = render_sql(tmpl, {})
+            except Exception:
+                sql = "(parameterized template)"
+            blocks.append((tmpl, sql, preds))
+        elif gen and gen not in seen:
+            seen.add(gen)
+            blocks.append(("genie_query_scoped (generated)", str(gen), preds))
+    if not blocks:
+        return html.Div([html.Div("Scoped SQL", style=H2),
+                         html.Div("No scoped query ran (e.g. the asset short-circuited out of scope).", style=MUTED)], style=CARD)
+    kids = [html.Div("Scoped SQL - the queries that fetched the evidence (SELECT-only, scope-locked)", style=H2)]
+    for name, sql, preds in blocks:
+        kids.append(html.Div(name, style={"fontSize": "12px", "fontWeight": 700, "color": COLORS["oxy"], "marginTop": "8px"}))
+        kids.append(html.Pre(sql, style=code))
+        kids.append(html.Div(f"scope predicates: {', '.join(preds) if preds else '-'}", style={**MUTED, "marginBottom": "4px"}))
+    kids.append(html.Div(f"Data source: {r.get('databricks_mode')}. In synthetic mode rows are served by the local "
+                         "executor; the SQL above is the real parameterized template that runs once a SQL warehouse "
+                         "+ governed views are bound. :equipment_id / :time_window / :row_cap are bound at run time.", style=MUTED))
+    return html.Div(kids, style=CARD)
+
+
+def render_governance_trace(r: Dict[str, Any]) -> html.Div:
+    """Everything that ran for the governed decision (the dedicated Governance Trace tab): a governance
+    summary, the model's tool plan + full deterministic tool trace, and the scoped SQL. Audit-complete -
+    this is the 'show me exactly what MAX did' view."""
+    if not r or r.get("error"):
+        return html.Div()
+    return html.Div([
+        _governance_summary(r),
+        render_tool_trace(r),   # LLM-planned tool sequence (DAG) + the full tool-execution table
+        _scoped_sql_card(r),
+    ], style={"display": "flex", "flexDirection": "column", "gap": "12px"})

@@ -43,6 +43,42 @@ SELECT
   material_cost           -- partial
 FROM {catalog}.{schema}.cost_source;   -- TODO(F1): confirm actual-cost source
 
+-- Row-level work-order detail (Level 2): one row per order, scope-locked + row-capped at query time.
+-- Cutover target = the SOAR WOs sheet (112 cols); select only the reviewer-relevant columns. Actual
+-- labor hrs / labor cost stay blank until Oxy posts labor actuals (F1) - the emptiness is the signal.
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_work_order_detail AS
+SELECT
+  equipment_id,
+  order_number        AS wo_number,        -- SOAR WOs: Order_Number
+  basic_start_date    AS order_date,       -- SOAR WOs: Basic_Start_Date
+  wo_type             AS order_type,       -- SOAR WOs: WO_Type -> preventive/corrective/reactive
+  maint_activity_type AS activity_type,    -- SOAR WOs: Maint_Activity_Type
+  order_short_text    AS description,
+  planned_work_hours  AS planned_hours,    -- SOAR Tasklist: Planned_Work_Hours
+  actual_labor_hours,                      -- AFRU actuals (BLANK in the sample - F1)
+  actual_material_cost AS material_cost,   -- SOAR Cost: Actual_Material_Cost (partial)
+  actual_labor_cost    AS labor_cost,      -- SOAR Cost: Actual_Internal/External_Labor_Cost (0 - F1)
+  work_center,
+  order_status         AS status,
+  time_window
+FROM {catalog}.{schema}.work_order_source;   -- TODO(P1/F1): bind to governed WO extract
+
+-- Row-level notification detail (Level 2): one row per notification, scope-locked + row-capped.
+-- Cutover target = the SOAR Notifications sheet. Damage/cause codes are partial (~56%/51%); the
+-- blank-coded rows are the coding gap the classifier flags.
+CREATE OR REPLACE VIEW {catalog}.{schema}.v_notification_detail AS
+SELECT
+  equipment_id,
+  notification_number,
+  failure_start_date   AS failure_date,    -- SOAR Notifications: Failure_Start_Date
+  damage_code,                             -- QMFE (partial)
+  cause_code,                              -- QMUR (partial)
+  object_part_code     AS object_part,     -- SOAR Notifications: Object_Part_Code
+  breakdown_duration   AS breakdown_duration_hrs,
+  linked_order         AS linked_wo,
+  time_window
+FROM {catalog}.{schema}.notification_source;  -- TODO(F1): confirm findings coding source
+
 -- Measurement readings (ABSENT in the SOAR sample: 0/175). CBM stays fail-closed until real
 -- reading time-series exist. Point-master data alone is NOT sufficient.
 CREATE OR REPLACE VIEW {catalog}.{schema}.v_measurement_reading_timeseries AS

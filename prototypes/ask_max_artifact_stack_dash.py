@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from dataclasses import dataclass
 from typing import Any
 
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, callback_context, dash_table, dcc, html, no_update
+from dash import ALL, Dash, Input, Output, State, callback_context, dash_table, dcc, html, no_update
 
 
 COLORS = {
@@ -47,6 +48,9 @@ class AskState:
     panel: str = "artifacts"
     query: str = "Should we change PM strategy for PUMP-4110?"
     resolved_asset: str | None = "PUMP-4110"
+    queue_filter: str = "all"
+    preview_asset: str | None = None
+    studio_variant: str = "b"
 
     @property
     def has_preview(self) -> bool:
@@ -58,6 +62,9 @@ class AskState:
             "panel": self.panel,
             "query": self.query,
             "resolved_asset": self.resolved_asset,
+            "queue_filter": self.queue_filter,
+            "preview_asset": self.preview_asset,
+            "studio_variant": self.studio_variant,
         }
 
     @classmethod
@@ -69,6 +76,9 @@ class AskState:
             panel=value.get("panel") or "artifacts",
             query=value.get("query") or "Should we change PM strategy for PUMP-4110?",
             resolved_asset=value.get("resolved_asset"),
+            queue_filter=value.get("queue_filter") or "all",
+            preview_asset=value.get("preview_asset"),
+            studio_variant=value.get("studio_variant") or "b",
         )
 
 
@@ -81,6 +91,42 @@ def resolve_asset(query: str) -> str | None:
     if "THIS PM" in text or "THIS ASSET" in text:
         return "PUMP-4110"
     return None
+
+
+def current_triggered_id() -> Any:
+    """Return Dash triggered_id, including decoded dict IDs for pattern-matching callbacks."""
+    triggered = callback_context.triggered_id
+    if isinstance(triggered, dict) or triggered is None:
+        return triggered
+    raw = (callback_context.triggered or [{}])[0].get("prop_id", "").rsplit(".", 1)[0]
+    if raw.startswith("{"):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return triggered
+    return triggered
+
+
+QUEUE_ROWS = [
+    {"asset": "COMP-2201", "pm": "PM-COMP-2201-A", "crit": "3", "label": "Governance Review Required", "gate": "BLOCKED", "reason": "MANDATORY_PM_CANNOT_REDUCE_COVERAGE", "next": "Keep PM, governance review", "filter": "blocked"},
+    {"asset": "VALVE-3301", "pm": "PM-VALVE-3301-A", "crit": "4", "label": "Governance Review Required", "gate": "BLOCKED", "reason": "MANDATORY_PM_CANNOT_REDUCE_COVERAGE", "next": "Keep PM, governance review", "filter": "blocked"},
+    {"asset": "PUMP-4115", "pm": "PM-PUMP-4115-A", "crit": "2", "label": "Governance Review Required", "gate": "BLOCKED", "reason": "CBM_REQUIRES_REAL_MEASUREMENT_READINGS", "next": "Collect CBM readings", "filter": "blocked"},
+    {"asset": "PUMP-4120", "pm": "PM-PUMP-4120-A", "crit": "3", "label": "Governance Review Required", "gate": "BLOCKED", "reason": "RTF_BARRED_FOR_CRITICAL_2_3_4", "next": "No RTF, escalate", "filter": "blocked"},
+    {"asset": "PUMP-4110", "pm": "PM-PUMP-4110-A", "crit": "2", "label": "Missing Evidence", "gate": "REVIEW_REQUIRED", "reason": "RISK_REVIEW_REQUIRED", "next": "Draft review package", "filter": "review"},
+    {"asset": "HX-6601", "pm": "PM-HX-6601-A", "crit": "0", "label": "Missing Evidence", "gate": "REVIEW_REQUIRED", "reason": "CRITICALITY_NOT_VALIDATED", "next": "Validate criticality", "filter": "review"},
+    {"asset": "PUMP-4116", "pm": "PM-PUMP-4116-A", "crit": "1", "label": "Missing Evidence", "gate": "DRAFT_ONLY", "reason": "CBM_SYNTHETIC_DEMO_ONLY", "next": "Demo draft only", "filter": "draft"},
+    {"asset": "MOTOR-5501", "pm": "PM-MOTOR-5501-A", "crit": "1", "label": "Missing Evidence", "gate": "DRAFT_ONLY", "reason": "WORK_STRATEGY_OWNER_REQUIRED", "next": "Assign WSO", "filter": "draft"},
+    {"asset": "PUMP-4140", "pm": "PM-PUMP-4140-A", "crit": "1", "label": "Not classified", "gate": "BLOCKED", "reason": "EXEMPT_ASSET_OUT_OF_SCOPE", "next": "No action", "filter": "blocked"},
+    {"asset": "FAN-7701", "pm": "PM-FAN-7701-A", "crit": "1", "label": "Missing Evidence", "gate": "REVIEW_REQUIRED", "reason": "CRITICALITY_OR_STRATEGY_CHANGE", "next": "Review with reliability", "filter": "review"},
+]
+
+PRIORITY_TILES = [
+    ("blocked", "Blocked", 5, "Cannot proceed without governance/data resolution"),
+    ("review", "Review Required", 3, "Human decision needed before package movement"),
+    ("draft", "Draft Only", 2, "Draft package allowed, no master data write"),
+    ("missing", "Missing Evidence", 5, "Evidence gaps block confident strategy scoring"),
+    ("readiness", "Data Readiness", 3, "Readiness gaps to close before execution"),
+]
 
 
 def css_text() -> str:
@@ -145,9 +191,69 @@ def css_text() -> str:
             .artifact-title { font-size: 18px; font-weight: 850; }
             .latest { border: 1px solid #87c99a; background: #eaf7ee; color: #15803d; border-radius: 999px; padding: 5px 13px; font-size: 12px; font-weight: 850; }
             .code-box { background: #f8fbff; border: 1px solid #d9e2ef; padding: 16px 18px; margin: 0; color: #17242f; font-family: Consolas, Menlo, monospace; font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
-            .studio-placeholder, .command-placeholder, .dashboard-grid, .preview-card { padding: 32px; }
+            .dashboard-grid, .preview-card { padding: 32px; }
             .workspace-title { font-size: 28px; color: #063f8f; font-weight: 850; margin: 0 0 10px; }
             .muted { color: #5b6b7a; }
+            .command-wrap { padding: 18px 22px 24px; height: calc(100vh - 139px); min-height: 760px; }
+            .command-grid { height: 100%; display: grid; grid-template-columns: 290px minmax(680px, 1fr); gap: 18px; }
+            .command-grid.with-preview { grid-template-columns: 290px minmax(580px, 1fr) 360px; }
+            .panel-pad { padding: 22px; }
+            .panel-title { font-size: 22px; font-weight: 850; color: #17242f; margin: 0 0 8px; }
+            .priority-tile { width: 100%; text-align: left; border: 1px solid #d9e2ef; background: white; border-radius: 8px; padding: 14px 14px; margin-top: 10px; cursor: pointer; }
+            .priority-tile.active { border-color: #0647b7; box-shadow: inset 4px 0 0 #0647b7; background: #f7fbff; }
+            .tile-row { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+            .tile-label { font-weight: 850; color: #17242f; }
+            .tile-count { color: #0647b7; font-size: 22px; font-weight: 900; }
+            .tile-note { color: #5b6b7a; font-size: 12px; margin-top: 4px; line-height: 1.35; }
+            .queue-header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 14px; }
+            .queue-filter-row { display: grid; grid-template-columns: 1.1fr 1fr 1fr 1fr 1.2fr; gap: 8px; margin-bottom: 10px; }
+            .mini-filter { border: 1px solid #d9e2ef; background: #f8fbff; color: #5b6b7a; border-radius: 6px; padding: 7px 9px; font-size: 12px; }
+            .queue-table { width: 100%; border-collapse: collapse; }
+            .queue-table th { text-align: left; color: #5b6b7a; font-size: 12px; padding: 9px 10px; border-bottom: 1px solid #d9e2ef; background: #f8fbff; }
+            .queue-table td { padding: 10px; border-bottom: 1px solid #d9e2ef; font-size: 13px; vertical-align: middle; }
+            .link-btn { border: 0; background: transparent; color: #0647b7; font-weight: 850; padding: 0; cursor: pointer; }
+            .ghost-btn { border: 1px solid #b9c8dc; color: #0647b7; background: white; border-radius: 6px; padding: 7px 10px; font-size: 12px; font-weight: 850; cursor: pointer; }
+            .gate { display: inline-block; min-width: 86px; text-align: center; color: white; border-radius: 4px; padding: 5px 7px; font-size: 11px; font-weight: 850; }
+            .gate.blocked { background: #c1261b; }
+            .gate.review { background: #b7791f; }
+            .gate.draft { background: #0647b7; }
+            .preview-rail { padding: 20px; }
+            .preview-kicker { color: #5b6b7a; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+            .preview-title { color: #063f8f; font-size: 24px; font-weight: 900; margin: 8px 0 12px; }
+            .reason-box { border: 1px solid #d9e2ef; border-radius: 8px; padding: 12px; background: #f8fbff; margin: 12px 0; }
+            .studio-wrap { padding: 18px 22px 24px; height: calc(100vh - 139px); min-height: 760px; }
+            .studio-page { height: 100%; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+            .studio-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+            .studio-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+            .studio-option-btn { border: 1px solid #b9c8dc; color: #0647b7; background: white; border-radius: 7px; padding: 8px 12px; font-size: 12px; font-weight: 900; cursor: pointer; }
+            .studio-option-btn.active { color: white; background: #0647b7; border-color: #0647b7; }
+            .studio-body { flex: 1; min-height: 0; }
+            .studio-grid { display: grid; grid-template-columns: minmax(310px, .82fr) minmax(430px, 1.12fr) minmax(320px, .8fr); gap: 18px; height: 100%; }
+            .studio-grid-b { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 18px; height: 100%; }
+            .studio-b-lower { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(520px, 1.2fr); gap: 18px; min-height: 0; }
+            .studio-grid-c { display: grid; grid-template-columns: minmax(420px, 1.1fr) minmax(360px, .9fr) minmax(320px, .75fr); gap: 18px; height: 100%; }
+            .studio-scroll { height: 100%; overflow-y: auto; }
+            .summary-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0 16px; }
+            .metric-tile { border: 1px solid #d9e2ef; border-radius: 8px; padding: 12px; background: #f8fbff; }
+            .metric-label { color: #5b6b7a; font-size: 12px; }
+            .metric-value { color: #17242f; font-size: 16px; font-weight: 900; margin-top: 3px; }
+            .recommendation-card { border: 2px solid #0647b7; border-radius: 9px; padding: 18px; background: #fbfdff; margin-bottom: 14px; }
+            .hero-recommendation { border: 2px solid #0647b7; border-radius: 10px; background: #fbfdff; padding: 20px 22px; display: grid; grid-template-columns: minmax(460px, 1.2fr) minmax(300px, .8fr); gap: 18px; align-items: center; }
+            .hero-title { margin: 5px 0 8px; color: #063f8f; font-size: 24px; font-weight: 900; }
+            .draft-card { border: 1px solid #d9e2ef; border-radius: 9px; padding: 16px; background: white; margin-bottom: 14px; }
+            .draft-badge { display: inline-block; border: 1px solid #0647b7; background: #eaf1ff; color: #0647b7; border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 900; }
+            .draft-editor { border: 2px solid #0647b7; border-radius: 10px; background: #fbfdff; padding: 18px; margin-bottom: 14px; }
+            .draft-field { border: 1px solid #d9e2ef; border-radius: 8px; background: white; padding: 12px; margin-top: 10px; }
+            .field-label { color: #5b6b7a; font-size: 12px; font-weight: 850; margin-bottom: 5px; }
+            .field-value { color: #17242f; font-weight: 800; line-height: 1.4; }
+            .step-list { display: grid; gap: 10px; margin-top: 12px; }
+            .step-item { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
+            .step-num { width: 28px; height: 28px; border-radius: 50%; background: #eaf1ff; color: #0647b7; display: grid; place-items: center; font-weight: 900; font-size: 12px; }
+            .sap-action-list { margin: 8px 0 0; padding-left: 20px; }
+            .sap-action-list li { margin: 8px 0; }
+            details.collapse-card { border: 1px solid #d9e2ef; border-radius: 9px; background: white; margin-bottom: 12px; }
+            details.collapse-card summary { cursor: pointer; padding: 15px 16px; font-weight: 900; color: #17242f; }
+            details.collapse-card > div { padding: 0 16px 16px; }
             """
     )
 
@@ -511,33 +617,397 @@ def ask_workspace(state: AskState) -> html.Div:
     return html.Div([html.Div(chat_panel(state), className="pane"), right_panel(state)], className="main-grid")
 
 
-def placeholder_workspace(state: AskState, workspace: str) -> html.Div:
-    if workspace == "command":
-        title = "Command Center"
-        body = "Landing queue: priority tiles filter the PM Health table. Selecting a row opens PM preview; blue PM link opens Studio."
-        cls = "command-placeholder"
-    else:
-        title = "Work Strategy Studio"
-        body = f"Governed PM review workspace for {state.resolved_asset or 'the selected PM'}: filters, evidence, comparison, gate, SAP package, approval state, and tool trace."
-        cls = "studio-placeholder"
-    return html.Div(
+def _gate_class(gate: str) -> str:
+    if gate == "BLOCKED":
+        return "gate blocked"
+    if gate == "DRAFT_ONLY":
+        return "gate draft"
+    return "gate review"
+
+
+def _filtered_queue(state: AskState) -> list[dict[str, str]]:
+    if state.queue_filter == "all":
+        return QUEUE_ROWS
+    if state.queue_filter == "missing":
+        return [r for r in QUEUE_ROWS if "Missing" in r["label"]]
+    if state.queue_filter == "readiness":
+        return [r for r in QUEUE_ROWS if "CBM" in r["reason"] or "CRITICALITY" in r["reason"] or "OWNER" in r["reason"]]
+    return [r for r in QUEUE_ROWS if r["filter"] == state.queue_filter]
+
+
+def command_center_workspace(state: AskState) -> html.Div:
+    rows = _filtered_queue(state)
+    preview_asset = state.preview_asset or state.resolved_asset
+    preview_row = next((r for r in QUEUE_ROWS if r["asset"] == preview_asset), None)
+    grid_class = "command-grid with-preview" if preview_row else "command-grid"
+
+    priority_panel = html.Div(
+        [
+            html.H2("Review Priorities", className="panel-title"),
+            html.Div("Click a tile to filter the PM Health queue. No expand/collapse here.", className="muted"),
+            html.Button("All queue items", id="priority-all", className=f"priority-tile {'active' if state.queue_filter == 'all' else ''}"),
+            *[
+                html.Button(
+                    [
+                        html.Div([html.Span(label, className="tile-label"), html.Span(str(count), className="tile-count")], className="tile-row"),
+                        html.Div(note, className="tile-note"),
+                    ],
+                    id=f"priority-{value}",
+                    className=f"priority-tile {'active' if state.queue_filter == value else ''}",
+                )
+                for value, label, count, note in PRIORITY_TILES
+            ],
+        ],
+        className="pane panel-pad",
+    )
+
+    table = html.Table(
+        [
+            html.Thead(
+                html.Tr(
+                    [
+                        html.Th("Asset"),
+                        html.Th("PM"),
+                        html.Th("Label"),
+                        html.Th("Gate"),
+                        html.Th("Recommended Next Action"),
+                        html.Th("Reason"),
+                        html.Th("Preview"),
+                    ]
+                )
+            ),
+            html.Tbody(
+                [
+                    html.Tr(
+                        [
+                            html.Td(html.Button(r["asset"], id=f"pm-studio-{r['asset']}", className="link-btn")),
+                            html.Td(r["pm"]),
+                            html.Td(r["label"]),
+                            html.Td(html.Span(r["gate"], className=_gate_class(r["gate"]))),
+                            html.Td(r["next"]),
+                            html.Td(r["reason"]),
+                            html.Td(html.Button("Open", id=f"pm-preview-{r['asset']}", className="ghost-btn")),
+                        ]
+                    )
+                    for r in rows
+                ]
+            ),
+        ],
+        className="queue-table",
+    )
+
+    queue_panel = html.Div(
         [
             html.Div(
                 [
-                    html.H1(title, className="workspace-title"),
-                    html.P(body, className="muted"),
-                    html.Div([html.Button("Back to Ask MAX", id="back-ask", className="primary-btn")], className="action-row"),
+                    html.Div(
+                        [
+                            html.H2("PM Health Review Queue", className="panel-title"),
+                            html.Div("Highest-attention PMs first. Blue asset links open Studio directly; Open shows a preview rail.", className="muted"),
+                        ]
+                    ),
+                    html.Div(f"{len(rows)} rows", className="latest"),
                 ],
-                className=f"pane {cls}",
-            )
+                className="queue-header",
+            ),
+            html.Div(
+                [
+                    html.Div("Asset filter", className="mini-filter"),
+                    html.Div("PM filter", className="mini-filter"),
+                    html.Div("Label filter", className="mini-filter"),
+                    html.Div("Gate filter", className="mini-filter"),
+                    html.Div("Reason filter", className="mini-filter"),
+                ],
+                className="queue-filter-row",
+            ),
+            table,
         ],
-        style={"padding": "18px 22px"},
+        className="pane panel-pad",
+    )
+
+    preview_panel = html.Div()
+    if preview_row:
+        preview_panel = html.Div(
+            [
+                html.Div("Selected PM preview", className="preview-kicker"),
+                html.Div(preview_row["asset"], className="preview-title"),
+                html.Div(preview_row["pm"], style={"fontWeight": 850}),
+                html.Div(
+                    [
+                        html.Div([html.Strong("Classification: "), preview_row["label"]]),
+                        html.Div([html.Strong("Gate: "), html.Span(preview_row["gate"], className=_gate_class(preview_row["gate"]))], style={"marginTop": "8px"}),
+                        html.Div([html.Strong("Reason: "), preview_row["reason"]], style={"marginTop": "8px"}),
+                    ],
+                    className="reason-box",
+                ),
+                html.P("Oxy context: this is a governed review queue. MAX may draft a package, but cannot write SAP or reduce mandatory coverage without human approval.", className="muted"),
+                html.Div(
+                    [
+                        html.Button("Ask MAX about this PM", id="command-preview-ask", className="primary-btn"),
+                        html.Button("Open in Studio", id="command-preview-studio", className="outline-btn"),
+                    ],
+                    className="action-row",
+                ),
+            ],
+            className="pane preview-rail",
+        )
+
+    return html.Div([html.Div([priority_panel, queue_panel, preview_panel], className=grid_class)], className="command-wrap")
+
+
+def studio_workspace(state: AskState) -> html.Div:
+    asset = state.resolved_asset or state.preview_asset or "PUMP-4110"
+    why_items = [
+        ("Evidence gap", "Vibration trend is incomplete and oil analysis is missing."),
+        ("Comparison signal", "Similar pumps with fuller CBM coverage show lower risk."),
+        ("Oxy governance", "Mandatory / criticality-protected PM changes require review."),
+        ("Gate", "REVIEW_REQUIRED: draft is allowed, direct SAP write-back is blocked."),
+    ]
+    sap_actions = [
+        "Create draft package PKG-PUMP-4110-STRAT-001.",
+        "Keep existing time-based PM active while evidence is remediated.",
+        "Add CBM measurement-point readiness task for vibration route.",
+        "Route to Planner and Reliability Engineer; no unattended SAP update.",
+    ]
+
+    def option_button(value: str, label: str) -> html.Button:
+        active = state.studio_variant == value
+        return html.Button(label, id=f"studio-option-{value}", className=f"studio-option-btn {'active' if active else ''}")
+
+    header = html.Div(
+        [
+            html.Div(
+                [
+                    html.H1("Work Strategy Studio", className="workspace-title"),
+                    html.Div(f"{asset} | Centrifugal Pump | Houston | Last 24 Months", className="muted"),
+                ]
+            ),
+            html.Div(
+                [
+                    option_button("a", "Option A: Decision Canvas"),
+                    option_button("b", "Option B: Recommendation First"),
+                    option_button("c", "Option C: Draft Workbench"),
+                ],
+                className="studio-options",
+            ),
+        ],
+        className="studio-header",
+    )
+
+    option_a = html.Div(
+        [
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div([html.Div("Gate", className="metric-label"), html.Div("REVIEW_REQUIRED", className="metric-value")], className="metric-tile"),
+                            html.Div([html.Div("Package", className="metric-label"), html.Div("DRAFT", className="metric-value")], className="metric-tile"),
+                            html.Div([html.Div("SAP write-back", className="metric-label"), html.Div("BLOCKED", className="metric-value")], className="metric-tile"),
+                        ],
+                        className="summary-strip",
+                    ),
+                    html.H2("Why MAX Recommended This", className="panel-title"),
+                    *[
+                        html.Div([html.Div(label, className="artifact-title"), html.P(body, className="muted")], className="artifact-card")
+                        for label, body in why_items
+                    ],
+                ],
+                className="pane panel-pad studio-scroll",
+            ),
+            html.Div(
+                [
+                    html.H2("MAX Recommendation", className="panel-title"),
+                    html.Div(
+                        [
+                            html.Div("Recommended strategy", className="preview-kicker"),
+                            html.H3("Draft a governed review package; do not reduce or retire the PM yet.", style={"margin": "8px 0 10px", "color": COLORS["oxy"]}),
+                            html.P("MAX recommends evidence remediation plus a planner / reliability engineer review before any SAP master-data change."),
+                            html.Div([html.Strong("Allowed: "), "Draft package for human review."], style={"color": COLORS["green"], "fontWeight": 800}),
+                            html.Div([html.Strong("Blocked: "), "Direct SAP update or unattended PM reduction."], style={"color": COLORS["red"], "fontWeight": 800, "marginTop": "6px"}),
+                        ],
+                        className="recommendation-card",
+                    ),
+                    html.Div(
+                        [
+                            html.Div([html.Span("DRAFT", className="draft-badge"), html.Span("  PKG-PUMP-4110-STRAT-001", style={"fontWeight": 900})]),
+                            html.P("Draft scope: retain current PM coverage, add CBM evidence tasks, and request governed review for any future interval change.", style={"marginTop": "12px"}),
+                            html.Div("SAP actions tied to this recommendation", className="artifact-title"),
+                            html.Ul([html.Li(a) for a in sap_actions], className="sap-action-list"),
+                            html.Div(
+                                [
+                                    html.Button("Open Draft Package", id="studio-open-draft", className="primary-btn"),
+                                    html.Button("Ask MAX why", id="studio-open-ask", className="outline-btn"),
+                                ],
+                                className="action-row",
+                            ),
+                        ],
+                        className="draft-card",
+                    ),
+                    artifact_card("Recommendation Evidence", evidence_table()),
+                ],
+                className="pane panel-pad studio-scroll",
+            ),
+            html.Div(
+                [
+                    html.H2("Governance Details", className="panel-title"),
+                    html.P("Detailed package and approval rails are tucked here to reduce visual load.", className="muted"),
+                    html.Details(
+                        [
+                            html.Summary("SAP Package Details"),
+                            html.Div(
+                                [
+                                    html.Pre(
+                                        "Package ID: PKG-PUMP-4110-STRAT-001\nStatus: DRAFT\nChange Type: PM strategy review\nProposed: add CBM evidence tasks, retain coverage\nSAP write-back: disabled in Wave 1",
+                                        className="code-box",
+                                    )
+                                ]
+                            ),
+                        ],
+                        className="collapse-card",
+                    ),
+                    html.Details(
+                        [
+                            html.Summary("Approval Workflow"),
+                            html.Div(
+                                [
+                                    html.P("Required approvers: Planner, Reliability Engineer."),
+                                    html.P("Current state: DRAFT."),
+                                    html.P("Next transition: ANALYST_REVIEWED after evidence review."),
+                                ]
+                            ),
+                        ],
+                        className="collapse-card",
+                    ),
+                    html.Details(
+                        [
+                            html.Summary("Tool Trace"),
+                            html.Div([gate_table()]),
+                        ],
+                        className="collapse-card",
+                    ),
+                ],
+                className="pane panel-pad studio-scroll",
+            ),
+        ],
+        className="studio-grid studio-body",
+    )
+
+    option_b = html.Div(
+        [
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div("MAX Recommendation", className="preview-kicker"),
+                            html.Div("Draft a governed review package; do not reduce or retire the PM yet.", className="hero-title"),
+                            html.P("This option makes the recommendation the first thing the user sees, then lets them scan why and what draft/SAP actions follow."),
+                        ]
+                    ),
+                    html.Div(
+                        [
+                            html.Div([html.Div("Gate", className="metric-label"), html.Div("REVIEW_REQUIRED", className="metric-value")], className="metric-tile"),
+                            html.Div([html.Div("Draft", className="metric-label"), html.Div("PKG-PUMP-4110-STRAT-001", className="metric-value")], className="metric-tile"),
+                            html.Div([html.Div("SAP write-back", className="metric-label"), html.Div("BLOCKED", className="metric-value")], className="metric-tile"),
+                        ],
+                        className="summary-strip",
+                    ),
+                ],
+                className="hero-recommendation",
+            ),
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.H2("Why MAX Recommended This", className="panel-title"),
+                            *[html.Div([html.Div(label, className="artifact-title"), html.P(body, className="muted")], className="artifact-card") for label, body in why_items],
+                        ],
+                        className="pane panel-pad studio-scroll",
+                    ),
+                    html.Div(
+                        [
+                            html.H2("Draft and SAP Actions", className="panel-title"),
+                            html.Div(
+                                [
+                                    html.Div([html.Span("DRAFT", className="draft-badge"), html.Span("  PKG-PUMP-4110-STRAT-001", style={"fontWeight": 900})]),
+                                    html.P("Draft scope: retain PM coverage, add CBM evidence tasks, and request governed review before strategy changes."),
+                                    html.Div("SAP actions tied to this recommendation", className="artifact-title"),
+                                    html.Ul([html.Li(a) for a in sap_actions], className="sap-action-list"),
+                                ],
+                                className="draft-card",
+                            ),
+                            html.Details([html.Summary("SAP Package Details"), html.Div([html.Pre("Package ID: PKG-PUMP-4110-STRAT-001\nStatus: DRAFT\nSAP write-back: disabled in Wave 1", className="code-box")])], className="collapse-card"),
+                            html.Details([html.Summary("Approval Workflow"), html.Div([html.P("Required approvers: Planner, Reliability Engineer."), html.P("Current state: DRAFT.")])], className="collapse-card"),
+                        ],
+                        className="pane panel-pad studio-scroll",
+                    ),
+                ],
+                className="studio-b-lower",
+            ),
+        ],
+        className="studio-grid-b studio-body",
+    )
+
+    option_c = html.Div(
+        [
+            html.Div(
+                [
+                    html.H2("DRAFT Package Workbench", className="panel-title"),
+                    html.Div(
+                        [
+                            html.Div([html.Span("DRAFT", className="draft-badge"), html.Span("  PKG-PUMP-4110-STRAT-001", style={"fontWeight": 900})]),
+                            html.Div([html.Div("Recommendation", className="field-label"), html.Div("Retain current PM coverage. Add CBM evidence tasks. Route for governed review before strategy change.", className="field-value")], className="draft-field"),
+                            html.Div([html.Div("SAP actions tied to recommendation", className="field-label"), html.Ul([html.Li(a) for a in sap_actions], className="sap-action-list")], className="draft-field"),
+                            html.Div([html.Div("Blocked action", className="field-label"), html.Div("Direct SAP update or unattended PM reduction.", className="field-value", style={"color": COLORS["red"]})], className="draft-field"),
+                        ],
+                        className="draft-editor",
+                    ),
+                    html.Div([html.Button("Ask MAX why", id="studio-open-ask", className="outline-btn")], className="action-row"),
+                ],
+                className="pane panel-pad studio-scroll",
+            ),
+            html.Div(
+                [
+                    html.H2("Why MAX Recommended This", className="panel-title"),
+                    html.Div(
+                        [
+                            html.Div([html.Div(str(i + 1), className="step-num"), html.Div([html.Div(label, className="artifact-title"), html.P(body, className="muted")])], className="step-item")
+                            for i, (label, body) in enumerate(why_items)
+                        ],
+                        className="step-list",
+                    ),
+                    artifact_card("Recommendation Evidence", evidence_table()),
+                ],
+                className="pane panel-pad studio-scroll",
+            ),
+            html.Div(
+                [
+                    html.H2("Governance Details", className="panel-title"),
+                    html.P("This option keeps governance tucked away unless the reviewer needs it.", className="muted"),
+                    html.Details([html.Summary("SAP Package Details"), html.Div([html.Pre("Package ID: PKG-PUMP-4110-STRAT-001\nStatus: DRAFT\nChange Type: PM strategy review", className="code-box")])], className="collapse-card"),
+                    html.Details([html.Summary("Approval Workflow"), html.Div([html.P("Planner and Reliability Engineer required."), html.P("Next state: ANALYST_REVIEWED.")])], className="collapse-card"),
+                    html.Details([html.Summary("Tool Trace"), html.Div([gate_table()])], className="collapse-card"),
+                ],
+                className="pane panel-pad studio-scroll",
+            ),
+        ],
+        className="studio-grid-c studio-body",
+    )
+
+    body = option_b if state.studio_variant == "b" else option_c if state.studio_variant == "c" else option_a
+    return html.Div(
+        [header, body],
+        className="studio-page",
     )
 
 
 def layout_from_state(state: AskState) -> html.Div:
-    body = ask_workspace(state) if state.workspace == "ask" else placeholder_workspace(state, state.workspace)
-    return html.Div([top_bar(state), context_row(state), body], className="app-shell")
+    if state.workspace == "command":
+        body = command_center_workspace(state)
+    elif state.workspace == "studio":
+        body = html.Div(studio_workspace(state), className="studio-wrap")
+    else:
+        body = ask_workspace(state)
+    return html.Div([context_row(state), body])
 
 
 app = Dash(__name__, title="MAX Ask Prototype", suppress_callback_exceptions=True)
@@ -547,16 +1017,111 @@ app.index_string = (
     + css_text()
     + "</style></head><body>{%app_entry%}<footer>{%config%}{%scripts%}{%renderer%}</footer></body></html>"
 )
-app.layout = html.Div([dcc.Store(id="ui-state", data=AskState().as_dict()), html.Div(id="prototype-root")])
-
-
-@app.callback(Output("prototype-root", "children"), Input("ui-state", "data"))
-def render(data: dict[str, Any] | None):
-    return layout_from_state(AskState.from_dict(data))
+app.layout = html.Div(
+    [
+        dcc.Store(id="ui-state", data=AskState().as_dict()),
+        top_bar(AskState()),
+        html.Div(id="prototype-root"),
+    ],
+    className="app-shell",
+)
 
 
 @app.callback(
-    Output("ui-state", "data"),
+    Output("prototype-root", "children"),
+    Output("nav-command", "className"),
+    Output("nav-ask", "className"),
+    Output("nav-studio", "className"),
+    Input("ui-state", "data"),
+)
+def render(data: dict[str, Any] | None):
+    state = AskState.from_dict(data)
+
+    def nav_class(workspace: str) -> str:
+        return "workspace-tab active" if state.workspace == workspace else "workspace-tab"
+
+    return layout_from_state(state), nav_class("command"), nav_class("ask"), nav_class("studio")
+
+
+@app.callback(
+    Output("ui-state", "data", allow_duplicate=True),
+    Input("nav-command", "n_clicks"),
+    Input("nav-ask", "n_clicks"),
+    Input("nav-studio", "n_clicks"),
+    State("ui-state", "data"),
+    prevent_initial_call=True,
+)
+def navigate(_command: int | None, _ask: int | None, _studio: int | None, data: dict[str, Any] | None):
+    state = AskState.from_dict(data)
+    triggered = current_triggered_id()
+    if triggered == "nav-command":
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=None, queue_filter=state.queue_filter, preview_asset=None, studio_variant=state.studio_variant).as_dict()
+    if triggered == "nav-ask":
+        return AskState(workspace="ask", panel=state.panel, query=state.query, resolved_asset=state.resolved_asset, queue_filter=state.queue_filter, preview_asset=state.preview_asset, studio_variant=state.studio_variant).as_dict()
+    if triggered == "nav-studio":
+        asset = state.preview_asset or state.resolved_asset or "PUMP-4110"
+        return AskState(workspace="studio", panel=state.panel, query=f"Review PM strategy for {asset}", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset, studio_variant=state.studio_variant).as_dict()
+    return state.as_dict()
+
+
+@app.callback(
+    Output("ui-state", "data", allow_duplicate=True),
+    Input("studio-option-a", "n_clicks", allow_optional=True),
+    Input("studio-option-b", "n_clicks", allow_optional=True),
+    Input("studio-option-c", "n_clicks", allow_optional=True),
+    State("ui-state", "data"),
+    prevent_initial_call=True,
+)
+def studio_option(_a: int | None, _b: int | None, _c: int | None, data: dict[str, Any] | None):
+    state = AskState.from_dict(data)
+    triggered = current_triggered_id()
+    variant = {"studio-option-a": "a", "studio-option-b": "b", "studio-option-c": "c"}.get(triggered, state.studio_variant)
+    asset = state.resolved_asset or state.preview_asset or "PUMP-4110"
+    return AskState(
+        workspace="studio",
+        panel=state.panel,
+        query=f"Review PM strategy for {asset}",
+        resolved_asset=asset,
+        queue_filter=state.queue_filter,
+        preview_asset=asset,
+        studio_variant=variant,
+    ).as_dict()
+
+
+@app.callback(
+    Output("ui-state", "data", allow_duplicate=True),
+    Input("priority-all", "n_clicks", allow_optional=True),
+    *[Input(f"priority-{value}", "n_clicks", allow_optional=True) for value, _label, _count, _note in PRIORITY_TILES],
+    *[Input(f"pm-preview-{row['asset']}", "n_clicks", allow_optional=True) for row in QUEUE_ROWS],
+    *[Input(f"pm-studio-{row['asset']}", "n_clicks", allow_optional=True) for row in QUEUE_ROWS],
+    Input("command-preview-ask", "n_clicks", allow_optional=True),
+    Input("command-preview-studio", "n_clicks", allow_optional=True),
+    State("ui-state", "data"),
+    prevent_initial_call=True,
+)
+def command_actions(*values):
+    state = AskState.from_dict(values[-1])
+    triggered = current_triggered_id()
+    if isinstance(triggered, str) and triggered.startswith("priority-"):
+        value = triggered.replace("priority-", "", 1)
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=None, queue_filter=value or "all", preview_asset=None).as_dict()
+    if isinstance(triggered, str) and triggered.startswith("pm-preview-"):
+        asset = triggered.replace("pm-preview-", "", 1)
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+    if isinstance(triggered, str) and triggered.startswith("pm-studio-"):
+        asset = triggered.replace("pm-studio-", "", 1)
+        return AskState(workspace="studio", panel=state.panel, query=f"Review PM strategy for {asset}", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+    if triggered == "command-preview-ask":
+        asset = state.preview_asset or state.resolved_asset or "PUMP-4110"
+        return AskState(workspace="ask", panel="artifacts", query=f"Should we change PM strategy for {asset}?", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+    if triggered == "command-preview-studio":
+        asset = state.preview_asset or state.resolved_asset or "PUMP-4110"
+        return AskState(workspace="studio", panel=state.panel, query=f"Review PM strategy for {asset}", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+    return state.as_dict()
+
+
+@app.callback(
+    Output("ui-state", "data", allow_duplicate=True),
     Input("ask-send", "n_clicks", allow_optional=True),
     Input("ask-input", "n_submit", allow_optional=True),
     Input("action-dashboard", "n_clicks", allow_optional=True),
@@ -566,10 +1131,9 @@ def render(data: dict[str, Any] | None):
     Input("panel-artifacts", "n_clicks", allow_optional=True),
     Input("panel-dashboard", "n_clicks", allow_optional=True),
     Input("panel-preview", "n_clicks", allow_optional=True),
-    Input("nav-command", "n_clicks", allow_optional=True),
-    Input("nav-ask", "n_clicks", allow_optional=True),
-    Input("nav-studio", "n_clicks", allow_optional=True),
     Input("back-ask", "n_clicks", allow_optional=True),
+    Input("studio-open-ask", "n_clicks", allow_optional=True),
+    Input("studio-open-draft", "n_clicks", allow_optional=True),
     Input({"type": "followup", "label": "What evidence is missing?"}, "n_clicks", allow_optional=True),
     Input({"type": "followup", "label": "Compare with PUMP-4102"}, "n_clicks", allow_optional=True),
     Input({"type": "followup", "label": "What can we approve?"}, "n_clicks", allow_optional=True),
@@ -581,7 +1145,7 @@ def render(data: dict[str, Any] | None):
     prevent_initial_call=True,
 )
 def update_state(*values):
-    triggered = callback_context.triggered_id
+    triggered = current_triggered_id()
     ask_value = values[-2]
     state = AskState.from_dict(values[-1])
     if not triggered:
@@ -589,28 +1153,59 @@ def update_state(*values):
 
     if triggered in ("ask-send", "ask-input"):
         query = (ask_value or "").strip() or state.query
-        return AskState(workspace="ask", panel="artifacts", query=query, resolved_asset=resolve_asset(query)).as_dict()
+        return AskState(workspace="ask", panel="artifacts", query=query, resolved_asset=resolve_asset(query), queue_filter=state.queue_filter).as_dict()
 
     if isinstance(triggered, dict) and triggered.get("type") == "followup":
         label = triggered.get("label", "")
         query = label
         if label == "Pick a PM to preview":
             query = "Show preview for PUMP-4110"
-        return AskState(workspace="ask", panel="artifacts", query=query, resolved_asset=resolve_asset(query) or state.resolved_asset).as_dict()
+        return AskState(workspace="ask", panel="artifacts", query=query, resolved_asset=resolve_asset(query) or state.resolved_asset, queue_filter=state.queue_filter).as_dict()
+
+    if isinstance(triggered, dict) and triggered.get("type") == "priority-filter":
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=None, queue_filter=triggered.get("value") or "all", preview_asset=None).as_dict()
+
+    if isinstance(triggered, dict) and triggered.get("type") == "pm-preview":
+        asset = triggered.get("asset")
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+
+    if isinstance(triggered, dict) and triggered.get("type") == "pm-studio":
+        asset = triggered.get("asset")
+        return AskState(workspace="studio", panel=state.panel, query=f"Review PM strategy for {asset}", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+
+    if isinstance(triggered, str) and triggered.startswith("priority-"):
+        value = triggered.replace("priority-", "", 1)
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=None, queue_filter=value or "all", preview_asset=None).as_dict()
+
+    if isinstance(triggered, str) and triggered.startswith("pm-preview-"):
+        asset = triggered.replace("pm-preview-", "", 1)
+        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+
+    if isinstance(triggered, str) and triggered.startswith("pm-studio-"):
+        asset = triggered.replace("pm-studio-", "", 1)
+        return AskState(workspace="studio", panel=state.panel, query=f"Review PM strategy for {asset}", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
 
     if triggered == "action-dashboard" or triggered == "panel-dashboard":
-        return AskState(workspace="ask", panel="dashboard", query=state.query, resolved_asset=state.resolved_asset).as_dict()
+        return AskState(workspace="ask", panel="dashboard", query=state.query, resolved_asset=state.resolved_asset, queue_filter=state.queue_filter, preview_asset=state.preview_asset).as_dict()
     if triggered == "action-preview" or triggered == "panel-preview":
         panel = "preview" if state.has_preview else "artifacts"
-        return AskState(workspace="ask", panel=panel, query=state.query, resolved_asset=state.resolved_asset).as_dict()
+        return AskState(workspace="ask", panel=panel, query=state.query, resolved_asset=state.resolved_asset, queue_filter=state.queue_filter, preview_asset=state.preview_asset).as_dict()
     if triggered == "panel-artifacts":
-        return AskState(workspace="ask", panel="artifacts", query=state.query, resolved_asset=state.resolved_asset).as_dict()
-    if triggered in ("action-studio", "preview-open-studio", "nav-studio"):
-        return AskState(workspace="studio", panel=state.panel, query=state.query, resolved_asset=state.resolved_asset).as_dict()
-    if triggered == "nav-command":
-        return AskState(workspace="command", panel=state.panel, query=state.query, resolved_asset=state.resolved_asset).as_dict()
+        return AskState(workspace="ask", panel="artifacts", query=state.query, resolved_asset=state.resolved_asset, queue_filter=state.queue_filter, preview_asset=state.preview_asset).as_dict()
+    if triggered in ("action-studio", "preview-open-studio", "command-preview-studio"):
+        asset = state.preview_asset or state.resolved_asset or "PUMP-4110"
+        return AskState(workspace="studio", panel=state.panel, query=f"Review PM strategy for {asset}", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
     if triggered in ("nav-ask", "back-ask"):
-        return AskState(workspace="ask", panel=state.panel, query=state.query, resolved_asset=state.resolved_asset).as_dict()
+        return AskState(workspace="ask", panel=state.panel, query=state.query, resolved_asset=state.resolved_asset, queue_filter=state.queue_filter, preview_asset=state.preview_asset).as_dict()
+    if triggered == "command-preview-ask":
+        asset = state.preview_asset or state.resolved_asset or "PUMP-4110"
+        return AskState(workspace="ask", panel="artifacts", query=f"Should we change PM strategy for {asset}?", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+    if triggered == "studio-open-ask":
+        asset = state.resolved_asset or state.preview_asset or "PUMP-4110"
+        return AskState(workspace="ask", panel="artifacts", query=f"Why did MAX recommend the draft package for {asset}?", resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
+    if triggered == "studio-open-draft":
+        asset = state.resolved_asset or state.preview_asset or "PUMP-4110"
+        return AskState(workspace="studio", panel=state.panel, query=state.query, resolved_asset=asset, queue_filter=state.queue_filter, preview_asset=asset).as_dict()
 
     return state.as_dict()
 

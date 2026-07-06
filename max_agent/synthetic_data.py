@@ -22,6 +22,27 @@ from typing import Any, Dict, List, Optional
 # Rotating-only sample (Equipment_Category = R), matching the SOAR profiling.
 _EQUIPMENT_CATEGORY = "R"
 
+# Standard rotating-equipment spare components (SAP Components / v_bom). The class "expected" BOM is
+# derived at run time from what like equipment actually link (pm_bom_completeness, tool 28); this
+# catalogue is only the synthetic source. Nothing here is an Oxy policy value.
+_STANDARD_BOM = [
+    ("MECH-SEAL", "Mechanical seal", "SEALS"),
+    ("BEARING", "Bearing set", "BEARINGS"),
+    ("IMPELLER", "Impeller", "ROTATING"),
+    ("COUPLING", "Coupling", "DRIVE"),
+]
+
+
+def _bom(linked_codes: List[str]) -> List[Dict[str, Any]]:
+    """Build v_bom rows from the standard catalogue, flagging which components the PM task list links.
+
+    `on_pm_task_list=True` means the component IS on this PM's task list; the Oxy gap is that most PM
+    task lists link none today. Real cutover reads v_bom (Components); the row shape is identical.
+    """
+    linked = set(linked_codes)
+    return [{"component_code": code, "description": desc, "material_group": mg,
+             "on_pm_task_list": code in linked} for code, desc, mg in _STANDARD_BOM]
+
 
 def _merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
     out = copy.deepcopy(base)
@@ -115,14 +136,125 @@ def _base(equipment_id: str, **overrides: Any) -> Dict[str, Any]:
         "wo_history": {"preventive": 10, "corrective": 3, "reactive": 1},
         "cost": {"labor_cost": 0.0, "material_cost": 1200.0, "basis": "material_services_partial_only"},
         "findings": {"damage_coded_pct": 0.56, "cause_coded_pct": 0.51},
+        # Task-list components (SAP Components / v_bom). Default healthy asset links all four (complete).
+        "bom": _bom(["MECH-SEAL", "BEARING", "IMPELLER", "COUPLING"]),
         "expected_gate_status": "PASS",
     }
     return _merge(base, overrides)
 
 
+# --- Row-level detail records (Level 2) -------------------------------------------------------------
+# Deterministically EXPAND each asset's aggregate counts into individual work-order + notification
+# records so the Artifacts detail tables reconcile to the summary (Level 1). No RNG - the demo stays
+# reproducible. Real cutover replaces these with v_work_order_detail / v_notification_detail views over
+# the SOAR WOs / Notifications sheets; the row shape is the same, so nothing downstream changes.
+_WO_TYPE_META = {
+    "preventive": ("Preventive service", "Scheduled inspection / service per task list"),
+    "corrective": ("Corrective repair", "Repair raised from an inspection finding"),
+    "reactive": ("Breakdown repair", "Unplanned breakdown / run-to-failure event"),
+}
+_DAMAGE_CODES = ["SEAL-LEAK", "BRG-WEAR", "VIB-HIGH", "CORROSION"]
+_CAUSE_CODES = ["NORMAL-WEAR", "MISALIGNMENT", "LUBE-FAILURE", "PROCESS-UPSET"]
+_OBJECT_PARTS = ["MECH-SEAL", "BEARING", "IMPELLER", "COUPLING"]
+_DETAIL_ANCHOR = (2026, 6)  # fixed synthetic as-of month (no Date.now, keeps the demo deterministic)
+
+
+def _date_months_ago(k: int) -> str:
+    total = _DETAIL_ANCHOR[0] * 12 + (_DETAIL_ANCHOR[1] - 1) - int(k)
+    yy, mm = divmod(total, 12)
+    return f"{yy:04d}-{mm + 1:02d}-15"
+
+
+def _work_order_detail_records(asset: Dict[str, Any]) -> List[Dict[str, Any]]:
+    wo = asset.get("wo_history", {}) or {}
+    eid = asset["equipment_id"]
+    wc = (asset.get("readiness") or {}).get("work_center") or "MECH01"
+    planned = float((asset.get("readiness") or {}).get("planned_hours") or 4.0)
+    material_total = float((asset.get("cost") or {}).get("material_cost") or 0.0)
+    seq = [t for t in ("preventive", "corrective", "reactive") for _ in range(int(wo.get(t, 0) or 0))]
+    total = len(seq)
+    repair_positions = [i for i, t in enumerate(seq) if t != "preventive"]
+    per_repair_material = round(material_total / len(repair_positions), 2) if repair_positions else 0.0
+    rows: List[Dict[str, Any]] = []
+    for i, otype in enumerate(seq):
+        activity, desc = _WO_TYPE_META[otype]
+        months_ago = round(i * 23 / max(total - 1, 1))
+        rows.append({
+            "wo_number": f"WO-{eid}-{i + 1:03d}",
+            "order_date": _date_months_ago(months_ago),
+            "order_type": otype,
+            "activity_type": activity,
+            "description": desc,
+            "planned_hours": planned if otype == "preventive" else round(planned * 1.5, 1),
+            "actual_labor_hours": None,   # honest gap - SOAR posts no labor actuals
+            "material_cost": (per_repair_material if otype != "preventive" else 0.0),
+            "labor_cost": 0.0,            # honest gap - SOAR labor cost is 0
+            "work_center": wc,
+            "status": "CLSD",
+        })
+    return rows
+
+
+def _notification_detail_records(asset: Dict[str, Any]) -> List[Dict[str, Any]]:
+    eid = asset["equipment_id"]
+    wo = asset.get("wo_history", {}) or {}
+    total = sum(int(v or 0) for v in wo.values())
+    f = asset.get("findings", {}) or {}
+    n_damage = round(float(f.get("damage_coded_pct") or 0.0) * total)  # reconciles to the coding %
+    n_cause = round(float(f.get("cause_coded_pct") or 0.0) * total)
+    rows: List[Dict[str, Any]] = []
+    for i in range(total):
+        months_ago = round(i * 23 / max(total - 1, 1))
+        has_damage, has_cause = i < n_damage, i < n_cause
+        rows.append({
+            "notification_number": f"NT-{eid}-{i + 1:03d}",
+            "failure_date": _date_months_ago(months_ago),
+            "damage_code": _DAMAGE_CODES[i % len(_DAMAGE_CODES)] if has_damage else None,
+            "cause_code": _CAUSE_CODES[i % len(_CAUSE_CODES)] if has_cause else None,
+            "object_part": _OBJECT_PARTS[i % len(_OBJECT_PARTS)] if has_damage else None,
+            "breakdown_duration_hrs": (2 + i % 6) if has_damage else None,
+            "linked_wo": f"WO-{eid}-{i + 1:03d}",
+        })
+    return rows
+
+
+def _failure_events(asset: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Individual UNPLANNED-failure events (one per corrective/reactive order) with DATED, varied
+    inter-failure intervals - the input to the reliability tools (25-27). Deterministic: gaps shrink
+    toward the window end (an accelerating / wear-out pattern) so the Weibull shape tells a coherent
+    story. Every field maps to the SOAR Notifications sheet (a real SAP table): failure_start_date =
+    Failure_Start_Date, downtime_hrs = Breakdown_Duration, object_part = Object_Part_Code, damage_code =
+    Damage_Code (QMFE), cause_code = Cause_Code (QMUR). Nothing invented - synthetic, real SAP shape."""
+    wo = asset.get("wo_history", {}) or {}
+    n = int(wo.get("corrective", 0) or 0) + int(wo.get("reactive", 0) or 0)
+    if n == 0:
+        return []
+    f = asset.get("findings", {}) or {}
+    n_dmg = round(float(f.get("damage_coded_pct") or 0) * n)
+    n_cause = round(float(f.get("cause_coded_pct") or 0) * n)
+    window = 730  # LAST_24_MONTHS observation window in days
+    gaps = [n - i for i in range(n)]          # decreasing gaps -> failures accelerate = wear-out
+    total = sum(gaps) or 1
+    ages, acc = [], 0
+    for g in gaps:
+        acc += g
+        ages.append(round(window * acc / total))
+    events = []
+    for i, age in enumerate(ages):
+        events.append({
+            "failure_start_date": _date_months_ago(round((window - age) / 30)),
+            "age_days": age,
+            "downtime_hrs": 4 + (i * 5) % 22,
+            "object_part": _OBJECT_PARTS[i % len(_OBJECT_PARTS)] if i < n_dmg else None,
+            "damage_code": _DAMAGE_CODES[i % len(_DAMAGE_CODES)] if i < n_dmg else None,
+            "cause_code": _CAUSE_CODES[i % len(_CAUSE_CODES)] if i < n_cause else None,
+        })
+    return events
+
+
 def synthetic_fleet() -> List[Dict[str, Any]]:
     """Deterministic synthetic fleet covering every governance outcome."""
-    return [
+    fleet = [
         # 1. PASS - criticality-1 retain PM, green evidence.
         _base("PUMP-4102"),
 
@@ -136,6 +268,9 @@ def synthetic_fleet() -> List[Dict[str, Any]]:
             proposed_recommendation={"type": "PM_FREQUENCY_CHANGE", "direction": "SHORTEN"},
             current_value="Quarterly PM", proposed_value="Monthly PM (trial)",
             trial={"cycles_completed": 2, "target_cycles": 3, "failures_after_pm": 0, "corrective_work_orders": 1, "new_findings": 2},
+            # Links 3 of 4 standard components (missing IMPELLER) - a BOM gap shown as evidence; the
+            # recommendation stays IMPROVE_TASK_LIST (task-list fix precedes ADD_COMPONENT).
+            bom=_bom(["MECH-SEAL", "BEARING", "COUPLING"]),
             expected_gate_status="REVIEW_REQUIRED",
         ),
 
@@ -237,7 +372,24 @@ def synthetic_fleet() -> List[Dict[str, Any]]:
             current_value="Basic PM", proposed_value="PM + added inspection",
             expected_gate_status="REVIEW_REQUIRED",
         ),
+
+        # 13. PASS gate, but a SPARE-PARTS / BOM gap -> MAX recommends ADD_COMPONENT (tool 28). Healthy,
+        # in-scope, GREEN task list, GREEN data; its PM task list links only 2 of the 4 components like
+        # pumps carry (missing IMPELLER + COUPLING), so the least-invasive keep-coverage fix is to add
+        # the missing components. The change under review is a plain retain, so the headline gate is PASS.
+        _base(
+            "PUMP-4150",
+            user_question="Does this pump's PM have the right spare parts / components?",
+            bom=_bom(["MECH-SEAL", "BEARING"]),
+            expected_gate_status="PASS",
+        ),
     ]
+    # Expand each asset's aggregates into row-level detail (Level 2) + dated failure events (reliability).
+    for a in fleet:
+        a["wo_detail"] = _work_order_detail_records(a)
+        a["notif_detail"] = _notification_detail_records(a)
+        a["failure_events"] = _failure_events(a)
+    return fleet
 
 
 def fleet_index() -> Dict[str, Dict[str, Any]]:

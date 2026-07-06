@@ -11,17 +11,15 @@ env:
   - name: "MAX_ENV"
     value: "dev"
 
-  # LLM narration + tool-calling orchestration ON: MAX explains the deterministic result in prose
-  # (governed - it may explain, never contradict the gate or invent an Oxy value). Data stays
-  # synthetic until SQL/Genie are also bound.
+  # LLM narration ON: the bound model EXPLAINS the deterministic result in prose, routed through the
+  # shared narration gate (it may explain a gate, never affirm a non-PASS one; it never invents an Oxy
+  # value). The GOVERNED decision stays fully deterministic - the LLM does not select or run tools for
+  # it. FREE-FLOW follow-ups may use the READ-ONLY tool loop when this endpoint is bound (agent_loop.py);
+  # it reads the last decision + fetches evidence but never re-runs the gate. Data stays synthetic until
+  # SQL/Genie are also bound. (There is no MAX_AGENTIC_ORCHESTRATION flag anymore - the governed
+  # tool-selection loop was removed; see prototypes/removed_governed_agentic_loop.py.)
   - name: "LLM_AGENT_ENDPOINT"
     value: "databricks-claude-sonnet-4-6"
-
-  # AI orchestration ON: Sonnet selects + sequences the deterministic tools to answer (LangGraph
-  # react agent), with the mandatory-tool enforcer (scope -> classify -> gate always run, outputs
-  # authoritative). Several LLM calls per Ask (~20-30s). Unset this to fall back to single-call narration.
-  - name: "MAX_AGENTIC_ORCHESTRATION"
-    value: "1"
 
   # --- Optional Databricks bindings (uncomment + configure to use real data) ---
   # - name: "SQL_WAREHOUSE_ID"
@@ -36,6 +34,17 @@ env:
   #   value: "oxy_pm"
   # - name: "MAX_SCHEMA"
   #   value: "max_agent"
+
+  # --- AI/BI (Lakeview) dashboard: dashboards/pm_health.lvdash.json ---
+  # Deployed + published in this workspace: dashboard 01f178f31d181a64a093a94fa9b2b253,
+  # backed by supplychain.max_agent.pm_health. The Ask MAX 'Dashboard' tab embeds it; if the
+  # cross-domain iframe is blocked, the "Open in Databricks" button uses AIBI_DASHBOARD_URL.
+  # (Embedding an AI/BI dashboard from another domain may require the app host in
+  # Settings -> Security -> approved domains for embedding.) See dashboards/DEPLOY_AIBI.md.
+  - name: "AIBI_DASHBOARD_EMBED_URL"
+    value: "https://adb-996942843495544.4.azuredatabricks.net/embed/dashboardsv3/01f178f31d181a64a093a94fa9b2b253"
+  - name: "AIBI_DASHBOARD_URL"
+    value: "https://adb-996942843495544.4.azuredatabricks.net/dashboardsv3/01f178f31d181a64a093a94fa9b2b253/published"
 
 # Notes:
 # - $DATABRICKS_APP_PORT is provided by the runtime; app.py binds to it (local fallback 8000).

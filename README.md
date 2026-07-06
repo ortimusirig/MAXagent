@@ -31,8 +31,18 @@ The design source of truth is the Obsidian vault, folder `70 - MAX Agent Build`:
 - **Draft-only.** MAX never writes to SAP directly in Wave 1 (`max_writes_sap` is always False).
 - **One agent, one 24-tool library.** Canonical tool names only (e.g. `draft_sap_change_package`,
   never `sap_change_package_drafter`).
-- **Safety decisions are deterministic**, not free-form LLM judgment. The LLM may explain a
-  gate/classifier result; it must never invent it.
+- **Safety decisions are deterministic**, not free-form LLM judgment. The LLM is **narration-only** on
+  the governed lane (LLM tool-calling orchestration was considered and removed - see
+  `ORCHESTRATION_DESIGN.md`). Every LLM answer - governed narration AND free-flow - passes one shared
+  **narration gate**: the model may explain a gate but never affirm a non-PASS one; if it does, it gets
+  one corrective re-prompt, then a deterministic template (the circuit breaker). `orchestration_mode` is
+  only ever `deterministic_only` or `llm_narrated`. Free-flow follow-ups sub-route by intent: **INFO**
+  (read the last decision + fetch evidence via read-only tools), **GATE_CHECK** (an ADVISORY read-only
+  gate preview - it runs the deterministic gate on a hypothetical and reports the verdict, but it is a
+  preview, never the authoritative decision, and drafts nothing), and **APPROVAL** (MAX only surfaces
+  inline approve/reject buttons; the authenticated human clicks and `approval_workflow_state` decides on
+  role + gate + self-approval). The invariant holds either lane: deterministic tools decide, the LLM
+  proposes/previews, the human commits approvals, and nothing reaches SAP (draft-only).
 - **BU and threshold values are PROPOSED / BU_DEFINED** until Oxy confirms them.
   `classifier_thresholds` and `moc_threshold` stay **null** in the shipped profile; the
   classifier runs in describe-and-flag mode until Oxy sets them.

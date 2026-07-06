@@ -15,7 +15,7 @@ All were valid. Fixes applied:
 
 | Finding | Fix | Residual |
 |---|---|---|
-| LLM narration could contradict the deterministic gate (user-facing) | Added a narration guard: a narration that affirms/approves a non-PASS gate is **rejected**, keeping the deterministic summary (`orchestrator._narration_contradicts_gate`) | Heuristic phrase list; not a semantic proof |
+| LLM narration could contradict the deterministic gate (user-facing) | Built ONE shared **narration gate** that guards BOTH governed narration and free-flow: an answer affirming a non-PASS change gets ONE corrective re-prompt, then the deterministic template as a circuit breaker (`orchestrator._narrate_guarded` + `_narration_affirms_blocked_change`). The model may explain a gate, never affirm a non-PASS one; the deterministic layer wins ties | Action-anchored heuristic detector; not a semantic proof |
 | Gate/package evaluated `proposed`, not MAX's recommendation (70/10:107) | **Coupled**: the SAP package now drafts MAX's recommendation, gated by the recommendation's own gate; the requested change + its gate stay visible for the demo; out-of-scope stays documentation-only (fail-closed) | Closed |
 | SQL guard only checked scope column *names* | Guard now requires scope predicates to be **value/param bound** (`col = :param` / `IN(...)` / `= 'value'`); `IS NOT NULL` is rejected (`sql_guard._scope_bound`) | Server-side param binding in the executor still TODO - see F |
 | Approval buttons bypassed `approval_workflow_state` | Callback now routes each click through the tool: **verifies role, blocks self-approval, records denied attempts** (`app.on_approval`) | Databricks groups are not yet mapped to approver roles, so real users are denied until the BU profile maps them (correct fail-closed) |
@@ -34,15 +34,29 @@ All were valid. Fixes applied:
 | G. UI (60/04, 30/AppExp) | **Partial** - context bar, chat, pills, queue-first, drill-through, readiness, governed approval, next-action column built; durable approval persistence pending |
 | H. No invented Oxy values | Conformant for deterministic outputs; LLM narration is now guarded against contradicting the gate |
 | I. Databricks seam | **Partial** - lazy/optional bindings present; server-side SQL parameter binding incomplete |
-| J. Tests | 190 pass; the tests no longer bless a gate-contradicting narration (it is asserted rejected) |
+| J. Tests | 300 pass; the tests no longer bless a gate-contradicting narration (it is asserted rejected on BOTH the governed and free-flow lanes) |
 
 ## LLM orchestration - honest status
 
-A **partial narration-only layer exists** (`agent_loop.py`, `agent_tools.py`): a LangGraph
-`create_react_agent` that, when a serving endpoint is bound, plans **read-only** tools and narrates,
-with the deterministic gate/label authoritative and the narration guarded. It is **not** a fully
-governed LLM-selected tool DAG that drives the recommendation/package, and it is dormant until
-`LLM_AGENT_ENDPOINT` is bound (deterministic-only fallback). Design: `ORCHESTRATION_DESIGN.md`.
+The **GOVERNED** lane is deterministic + narration-only: `_run_asset` runs the fixed tool pipeline
+(incl. `oxy_gate_check`) and the LLM only narrates the finished decision. The optional LLM tool-selection
+loop that used to sit on the governed lane was **removed** (it never changed a decision) - see
+`ORCHESTRATION_DESIGN.md`; the code is archived in `prototypes/removed_governed_agentic_loop.py`.
+`orchestration_mode` is only ever `deterministic_only` or `llm_narrated`. (It was a manual `bind_tools`
+loop, never LangGraph - `create_react_agent` crashed on Databricks.)
+
+The **FREE-FLOW** lane is a richer conversational lane, sub-routed by intent:
+- **INFO** - read the last governed decision + fetch scoped evidence via READ-ONLY tools (`make_agent_tools`).
+- **GATE_CHECK** - an ADVISORY, read-only gate preview: `preview_gate_check` runs the real deterministic
+  `oxy_gate_check` on a HYPOTHETICAL change and reports the verdict. It is a preview, never the
+  authoritative decision; it drafts nothing, and a governed review is still required to make a change official.
+- **APPROVAL** - MAX SURFACES inline approve/reject buttons; the authenticated human clicks and
+  `approval_workflow_state` decides (role + gate + self-approval + audit). Draft-only; never writes SAP.
+
+Both LLM lanes pass one shared **narration gate** (`_narrate_guarded`): the model may explain a gate,
+never affirm a non-PASS one; a contradiction gets one corrective re-prompt, then a deterministic template.
+Free-flow answers also render a read-only card in the Artifacts panel. The one invariant: deterministic
+tools decide; the LLM proposes/previews; the human commits approvals; nothing reaches SAP.
 
 ## Still deferred (with rationale)
 

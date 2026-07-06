@@ -20,18 +20,24 @@ _KEYWORD_CLASS = {
 }
 
 
+def _candidate_result(matched_on: str, candidates):
+    return {"equipment_id": None, "matched_on": matched_on, "candidates": list(candidates)}
+
+
 def resolve_asset_from_text(text: str, fleet_index: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """Resolve a free-text question to an in-scope equipment_id (deterministic, fail-open-to-ask)."""
+    """Resolve a free-text question to an equipment_id only when the user names an exact fleet id."""
     t = (text or "").strip().lower()
     if not t:
         return {"equipment_id": None, "matched_on": None, "candidates": []}
 
-    # 1. An explicit equipment id in the text wins (exact substring, case-insensitive).
+    # 1. An explicit in-fleet equipment id wins. Bound it so a fabricated id like PUMP-41020 does not
+    # accidentally match PUMP-4102.
     for eid in fleet_index:
-        if eid.lower() in t:
+        if re.search(rf"(?<![a-z0-9]){re.escape(eid.lower())}(?![a-z0-9])", t):
             return {"equipment_id": eid, "matched_on": "equipment_id", "candidates": [eid]}
 
-    # 2. Asset-class tokens mentioned in the text (e.g. "centrifugal", "compressor").
+    # 2. Asset-class tokens mentioned in the text (e.g. "centrifugal", "compressor"). These produce
+    # candidates only; the UI must ask the user to disambiguate rather than choosing the first asset.
     class_hits = []
     for eid, a in fleet_index.items():
         cls = str(a.get("asset_class", "")).lower()
@@ -39,20 +45,22 @@ def resolve_asset_from_text(text: str, fleet_index: Dict[str, Dict[str, Any]]) -
         if cls and (cls.replace("_", " ") in t or any(tok in t for tok in tokens)):
             class_hits.append(eid)
     if class_hits:
-        return {"equipment_id": class_hits[0], "matched_on": "asset_class",
-                "candidates": class_hits}
+        return _candidate_result("asset_class", class_hits)
 
     # 3. Everyday keyword -> class family.
     for kw, fam in _KEYWORD_CLASS.items():
         if kw in t:
             hits = [eid for eid, a in fleet_index.items() if fam in str(a.get("asset_class", "")).upper()]
             if hits:
-                return {"equipment_id": hits[0], "matched_on": f"keyword:{kw}", "candidates": hits}
+                return _candidate_result(f"keyword:{kw}", hits)
 
-    # 4. Plant mention, if it narrows to something.
-    for eid, a in fleet_index.items():
-        if str(a.get("plant", "")).lower() in t and a.get("plant"):
-            return {"equipment_id": eid, "matched_on": "plant", "candidates": [eid]}
+    # 4. Plant mention can define a population, but it is still not a single asset lock.
+    plant_hits = [
+        eid for eid, a in fleet_index.items()
+        if a.get("plant") and str(a.get("plant", "")).lower() in t
+    ]
+    if plant_hits:
+        return _candidate_result("plant", plant_hits)
 
     # Nothing matched -> ask the user to pick (never fabricate a target).
     return {"equipment_id": None, "matched_on": None, "candidates": []}

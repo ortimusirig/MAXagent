@@ -78,14 +78,20 @@ class MaxDatabricksClient:
             return None
 
         from databricks.sdk import WorkspaceClient  # lazy
-        from .sql_templates import render_sql
+        from databricks.sdk.service.sql import StatementParameterListItem  # lazy
+        from .sql_templates import sql_execution_plan
 
         ws = WorkspaceClient()
 
         def _execute(template_name: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-            statement = render_sql(template_name, params, catalog=self.catalog, schema=self.schema)
+            # Scope predicates are BOUND server-side (named parameters), never interpolated into the SQL
+            # text - the warehouse enforces the scope filter and there is no injection surface. row_cap is
+            # inlined as a trusted integer by sql_execution_plan.
+            statement, named = sql_execution_plan(template_name, params, catalog=self.catalog, schema=self.schema)
+            parameters = [StatementParameterListItem(name=p["name"], value=p["value"]) for p in named]
             resp = ws.statement_execution.execute_statement(
-                warehouse_id=self.warehouse_id, statement=statement, wait_timeout="30s"
+                warehouse_id=self.warehouse_id, statement=statement,
+                parameters=parameters or None, wait_timeout="30s",
             )
             result = getattr(resp, "result", None)
             data = getattr(result, "data_array", None) or []
@@ -125,19 +131,26 @@ class MaxDatabricksClient:
             return None
 
     # --- LLM narration (optional) -----------------------------------------
-    def llm_complete(self, prompt: str, system: Optional[str] = None) -> Optional[str]:
-        """Narrate a deterministic result via the serving endpoint, or None if not bound."""
+    def llm_complete(self, prompt: str, system: Optional[str] = None, max_tokens: int = 1500) -> Optional[str]:
+        """Narrate a deterministic result via the serving endpoint, or None if not bound.
+
+        max_tokens defaults to 1500 so the full governed narration (Overview + evidence + reliability + BOM
+        + recommendation) is never truncated mid-sentence; short calls (intent / entity extraction) stop
+        early regardless. The WorkspaceClient is cached on the instance - constructing it per call re-runs
+        auth discovery and adds real latency to every LLM turn (several per Ask)."""
         if not self.llm_bound():
             return None
         try:
             from databricks.sdk import WorkspaceClient  # lazy
             from databricks.sdk.service.serving import ChatMessage, ChatMessageRole  # lazy
-            ws = WorkspaceClient()
+            if getattr(self, "_ws", None) is None:
+                self._ws = WorkspaceClient()
+            ws = self._ws
             messages = []
             if system:
                 messages.append(ChatMessage(role=ChatMessageRole.SYSTEM, content=system))
             messages.append(ChatMessage(role=ChatMessageRole.USER, content=prompt))
-            resp = ws.serving_endpoints.query(name=self.llm_endpoint, messages=messages, max_tokens=400)
+            resp = ws.serving_endpoints.query(name=self.llm_endpoint, messages=messages, max_tokens=max_tokens)
             choices = getattr(resp, "choices", None) or []
             if choices:
                 msg = getattr(choices[0], "message", None)

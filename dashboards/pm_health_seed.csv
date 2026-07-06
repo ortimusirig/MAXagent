@@ -1,0 +1,14 @@
+equipment_id,asset_class,criticality,label,gate_status,data_readiness,do_not_optimize,next_action,reason,provenance
+PUMP-4102,CENTRIFUGAL_PUMP,1,Missing Evidence,PASS,GREEN,False,Request evidence,-,SYNTHETIC
+PUMP-4110,CENTRIFUGAL_PUMP,2,Governance Review Required,REVIEW_REQUIRED,YELLOW,True,Route to governance review (keep-coverage improvement),RISK_REVIEW_REQUIRED,SYNTHETIC
+COMP-2201,RECIP_COMPRESSOR,3,Governance Review Required,BLOCKED,GREEN,True,Route to governance review (keep-coverage improvement),MANDATORY_PM_CANNOT_REDUCE_COVERAGE,SYNTHETIC
+VALVE-3301,ESD_VALVE,4,Governance Review Required,BLOCKED,GREEN,True,Route to governance review (keep-coverage improvement),MANDATORY_PM_CANNOT_REDUCE_COVERAGE,SYNTHETIC
+PUMP-4115,CENTRIFUGAL_PUMP,2,Governance Review Required,BLOCKED,GREEN,True,Route to governance review (keep-coverage improvement),CBM_REQUIRES_REAL_MEASUREMENT_READINGS,SYNTHETIC
+PUMP-4116,CENTRIFUGAL_PUMP,1,Missing Evidence,DRAFT_ONLY,GREEN,False,Request evidence,CBM_SYNTHETIC_DEMO_ONLY,SYNTHETIC
+MOTOR-5501,ELECTRIC_MOTOR,1,Missing Evidence,DRAFT_ONLY,GREEN,False,Draft least-invasive improvement (gated),WORK_STRATEGY_OWNER_REQUIRED,SYNTHETIC
+PUMP-4120,CENTRIFUGAL_PUMP,3,Governance Review Required,BLOCKED,GREEN,True,Route to governance review (keep-coverage improvement),RTF_BARRED_FOR_CRITICAL_2_3_4,SYNTHETIC
+HX-6601,HEAT_EXCHANGER,0,Missing Evidence,REVIEW_REQUIRED,GREEN,False,Route to governance review,CRITICALITY_NOT_VALIDATED,SYNTHETIC
+PUMP-4130,CENTRIFUGAL_PUMP,2,Not classified (out of analysis scope),BLOCKED,GREEN,False,-,NON_OPERATED_OR_JV_OUT_OF_SCOPE,SYNTHETIC
+PUMP-4140,CENTRIFUGAL_PUMP,1,Not classified (out of analysis scope),BLOCKED,GREEN,False,-,EXEMPT_ASSET_OUT_OF_SCOPE,SYNTHETIC
+FAN-7701,COOLING_FAN,1,Missing Evidence,REVIEW_REQUIRED,GREEN,False,Request evidence,CRITICALITY_OR_STRATEGY_CHANGE,SYNTHETIC
+PUMP-4150,CENTRIFUGAL_PUMP,1,Missing Evidence,PASS,GREEN,False,Draft least-invasive improvement (gated),-,SYNTHETIC

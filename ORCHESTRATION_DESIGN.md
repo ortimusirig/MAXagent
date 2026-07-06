@@ -1,7 +1,23 @@
 # MAX Agent - LLM Tool-Calling Orchestration (Design Note)
 
-Status: PROPOSED for review (no code yet). This describes how to add the agentic tool-selection
-layer the build docs describe, without weakening any deterministic safety guarantee.
+Status: **CONSIDERED AND DEFERRED / REMOVED (2026-07-06).** This was built as an optional, default-off
+governed tool-selection loop and then removed, because it never changed a decision (the deterministic
+`_run_asset` is authoritative) - it only added a tool-DAG + narration, at the cost of extra LLM calls
+and a fourth `orchestration_mode`. The GOVERNED lane is now deterministic + a single narration routed
+through the shared narration gate (`orchestrator._narrate_guarded`); `orchestration_mode` is only
+`deterministic_only` or `llm_narrated`. The removed code is preserved verbatim (this is not a git repo)
+in `prototypes/removed_governed_agentic_loop.py`.
+
+What DID survive from this idea: the **FREE-FLOW** lane keeps a genuine agentic tool loop, sub-routed by
+intent. **INFO** binds the READ-ONLY tools (`agent_tools.make_agent_tools`) - it reads the last decision
+and fetches evidence and re-decides nothing. **GATE_CHECK** adds an ADVISORY, read-only preview tool
+(`make_gate_preview_tool -> preview_gate_check`) that runs the real deterministic `oxy_gate_check` on a
+HYPOTHETICAL change and reports the verdict as a preview (never the authoritative decision; it drafts
+nothing; a governed review is still required). **APPROVAL** surfaces inline approve/reject buttons that a
+human clicks, routed through `approval_workflow_state`. So free-flow can preview the gate and surface the
+approval action, but the LLM never mints a governed decision, authorizes, or writes SAP - the
+deterministic tools decide, the human commits. The section below is retained as the historical design
+rationale for the (removed) GOVERNED tool-selection loop; it does not describe the current lanes.
 
 ## Why
 

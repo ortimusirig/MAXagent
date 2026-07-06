@@ -17,6 +17,8 @@ from dash import dcc, html
 
 from ..orchestrator import MaxAgent
 from .command_center import render_command_center
+from .dashboard_embed import render_aibi_dashboard
+from .studio import render_studio
 from .theme import COLORS, FONT, MUTED
 
 _TIME_WINDOWS = ["LAST_12_MONTHS", "LAST_24_MONTHS", "LAST_36_MONTHS"]
@@ -65,21 +67,16 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
     ws_command = html.Div(render_command_center(portfolio_health), id="ws-command", style={"display": "block"})
 
     # --- Ask MAX workspace: pure chat + artifact tabs; scope is a hidden carrier ---
-    hidden_scope = html.Div([
-        dcc.Dropdown(id="asset-dropdown", options=asset_options, value=first, clearable=False),
-        dcc.Dropdown(id="time-window", options=[{"label": t, "value": t} for t in _TIME_WINDOWS],
-                     value="LAST_24_MONTHS", clearable=False),
-        dcc.Dropdown(id="review-type", options=[{"label": t, "value": t} for t in _REVIEW_TYPES],
-                     value=_REVIEW_TYPES[0], clearable=False),
-        html.Div(id="context-bar"),
-    ], style={"display": "none"})
+    # The scope dropdowns now live (visibly) in the Studio filter bar below; Ask MAX only needs the
+    # hidden context-bar output target (Ask MAX has no visible scope bar, by design).
+    hidden_scope = html.Div([html.Div(id="context-bar")], style={"display": "none"})
 
     left = html.Div([
         html.Div("Ask MAX", style={"fontWeight": 700, "color": COLORS["ink"], "marginBottom": "8px"}),
         html.Div([
-            html.Div(id="chat-echo"),
-            html.Div(id="chat-output"),
-            html.Div(id="chat-status"),
+            html.Div(id="chat-history"),   # accumulated transcript (oldest -> newest), re-rendered from chat-messages
+            html.Div(id="chat-status"),    # live "MAX is thinking..." indicator, sits below the newest turn
+            html.Div(id="chat-scroll-anchor", style={"display": "none"}),  # auto-scroll target
         ], id="chat-scroll", style={
             "flex": "1", "overflowY": "auto", "display": "flex", "flexDirection": "column",
             "gap": "10px", "padding": "4px 2px 10px 2px",
@@ -104,8 +101,10 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
     # Empty at start; all three build up as you chat (callbacks populate them once MAX answers).
     tabs = dcc.Tabs(id="artifact-tabs", value="artifacts", children=[
         dcc.Tab(label="Artifacts", value="artifacts", children=html.Div(id="tab-artifacts", style={"padding": "12px"})),
-        dcc.Tab(label="Dashboard", value="dashboard", children=html.Div(id="tab-dashboard", style={"padding": "12px"})),
+        dcc.Tab(label="Dashboard", value="dashboard",
+                children=html.Div(render_aibi_dashboard(portfolio_health), id="tab-dashboard", style={"padding": "12px"})),
         dcc.Tab(label="Preview", value="preview", children=html.Div(id="tab-preview", style={"padding": "12px"})),
+        dcc.Tab(label="Governance Trace", value="trace", children=html.Div(id="tab-trace", style={"padding": "12px"})),
     ])
     right = html.Div([tabs], style={"flex": "1", "padding": "12px", "boxSizing": "border-box", "overflowY": "auto", "background": COLORS["bg"]})
     ws_ask = html.Div([
@@ -113,14 +112,30 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
         html.Div([left, right], style={"display": "flex", "height": "calc(100vh - 190px)"}),
     ], id="ws-ask", style={"display": "none"})
 
-    # --- Work Strategy Studio workspace (governed approval lands next slice) ---
+    # --- Work Strategy Studio workspace (governed review; owns the visible scope filter bar) ---
+    # Studio is a STANDALONE workflow: its own Asset / Time window / Review type filters drive the
+    # governed review directly - no chat and no Command Center drill-in required. (A Command Center
+    # drill-in or a chat still set the same shared dropdowns, so continuity is preserved.) The on_studio
+    # callback fills studio-body for the selected scope; render_studio() draws the empty guidance state.
+    _lbl = {"fontSize": "11px", "fontWeight": 700, "color": COLORS["muted"], "textTransform": "uppercase",
+            "letterSpacing": "0.05em", "marginBottom": "4px"}
+
+    def _field(label, comp, min_width):
+        return html.Div([html.Div(label, style=_lbl), comp], style={"minWidth": min_width, "flex": "1"})
+
+    studio_filters = html.Div([
+        _field("Asset", dcc.Dropdown(id="asset-dropdown", options=asset_options, value=first, clearable=False), "190px"),
+        _field("Time window", dcc.Dropdown(id="time-window", options=[{"label": t, "value": t} for t in _TIME_WINDOWS],
+                                           value="LAST_24_MONTHS", clearable=False), "170px"),
+        _field("Review type", dcc.Dropdown(id="review-type", options=[{"label": t, "value": t} for t in _REVIEW_TYPES],
+                                           value=_REVIEW_TYPES[0], clearable=False), "260px"),
+    ], style={"display": "flex", "gap": "14px", "alignItems": "flex-end", "padding": "14px 22px",
+              "borderBottom": f"1px solid {COLORS['line']}", "background": "#fbfdff"})
+
     ws_studio = html.Div([
-        html.Div("Work Strategy Studio", style={"fontSize": "18px", "fontWeight": 800, "color": COLORS["ink"]}),
-        html.Div("The selected asset's context bar, recommendation, drafted SAP change package, and the "
-                 "governed approve / request-changes / reject workflow (routed through the deterministic "
-                 "approval tool - a click is not authorization) land here in the next slice.",
-                 style={**MUTED, "marginTop": "8px", "maxWidth": "70ch"}),
-    ], id="ws-studio", style={"display": "none", "padding": "18px 22px"})
+        studio_filters,
+        html.Div(render_studio(None), id="studio-body"),
+    ], id="ws-studio", style={"display": "none"})
 
     return html.Div([
         header, nav, ws_command, ws_ask, ws_studio,
@@ -129,6 +144,10 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
         dcc.Store(id="approval-audit", data=[]),
         dcc.Store(id="chat-question"),
         dcc.Store(id="chat-artifacts"),  # model-selected artifact names for the current answer
+        dcc.Store(id="chat-messages", data=[]),  # accumulated Ask MAX transcript (user + assistant turns)
+        dcc.Store(id="artifacts-history", data=[]),   # accumulated artifact sets, one per answered question
+        dcc.Store(id="artifacts-collapsed", data=[]), # turn numbers whose artifact history card is collapsed
+        dcc.Store(id="trace-collapsed", data=[]),     # turn numbers whose governance-trace card is collapsed
         dcc.Store(id="session-id"),
         dcc.Interval(id="thinking-interval", interval=600, n_intervals=0),
     ], style={"fontFamily": FONT, "background": COLORS["bg"], "color": COLORS["ink"], "minHeight": "100vh"})

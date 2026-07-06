@@ -18,11 +18,17 @@ _EXPECTED_TOOLS = {
     "contractor_service_readiness", "planned_hours_calibration", "cbm_measurement_readiness",
     "oxy_gate_check", "approval_workflow_state", "draft_sap_change_package",
     "trial_monitor", "value_kpi_tracker",
+    # reliability-evidence extension (tools 25-27)
+    "reliability_metrics", "weibull_reliability", "failure_mode_summary",
+    # parts / BOM-completeness evidence (tool 28)
+    "pm_bom_completeness",
+    # SAP-transactional anomaly / drift evidence (tools 29-30)
+    "reliability_drift_monitor", "sap_cost_distribution",
 }
 
 
-def test_library_has_the_canonical_24_tools():
-    assert len(MAX_AGENT_TOOL_LIBRARY) == 24
+def test_library_has_the_canonical_24_plus_evidence_extensions():
+    assert len(MAX_AGENT_TOOL_LIBRARY) == 30
     assert set(MAX_AGENT_TOOL_LIBRARY) == _EXPECTED_TOOLS
     assert all(callable(fn) for fn in MAX_AGENT_TOOL_LIBRARY.values())
 
@@ -32,7 +38,8 @@ def test_in_scope_run_exercises_wave_bcd_tools():
     result = agent.run("PUMP-4110")  # in-scope, has an active trial
     traced = {t["tool"] for t in result["tool_trace"]}
     for tool in ("genie_query_scoped", "task_list_bom_readiness", "cbm_measurement_readiness",
-                 "like_equipment_matcher", "pm_comparison_engine", "trial_monitor"):
+                 "like_equipment_matcher", "pm_comparison_engine", "trial_monitor", "pm_bom_completeness",
+                 "reliability_drift_monitor", "sap_cost_distribution"):
         assert tool in traced, f"{tool} missing from trace"
     assert set(result["readiness_checks"]).issuperset({"task_list_bom_readiness", "cbm_measurement_readiness"})
     assert "cohort" in result["comparison_result"]

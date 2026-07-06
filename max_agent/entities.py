@@ -38,8 +38,13 @@ ARTIFACT_CHOICES = {
     "data_readiness": "data-readiness RAG and the SAP data still needed",
     "cost": "honest cost view (material vs labor basis)",
     "comparison": "like-equipment comparison and standardization candidates",
-    "evidence_table": "scoped work-order and failure-coding records table",
-    "gate_trace": "deterministic gate result and tool-execution trace",
+    "evidence_table": "work-order evidence with a Summary/Detailed toggle (breakdown + failure coding, "
+                      "and the individual per-order and per-notification records)",
+    "reliability": "reliability evidence - MTBF/MTTR/availability, the Weibull failure-hazard shape and "
+                   "RUL, and the top failure modes (evidence, not a decision)",
+    "drift_anomaly": "SAP-transactional anomaly / drift evidence - failure-interval drift and trend, "
+                     "reactive-work-mix trend, cohort bad-actor outlier, and the material/services cost "
+                     "bands (evidence that flags a candidate change; not a decision)",
 }
 
 ENTITY_SYSTEM = (
@@ -57,9 +62,16 @@ ENTITY_SYSTEM = (
     "- review_type: one of 'PM effectiveness and strategy review', 'Frequency change review', "
     "'CBM conversion review', 'Task list cleanup review', 'Retire / run-to-failure review'.\n"
     "- artifacts: a JSON list naming ONLY the visual artifacts this answer needs, chosen from: "
-    "work_order_mix, data_readiness, cost, comparison, evidence_table, gate_trace. Pick the few that "
-    "fit the question (e.g. a frequency question needs comparison + work_order_mix + gate_trace; a "
-    "cost question needs cost; a 'why blocked' question needs gate_trace + data_readiness).\n"
+    "work_order_mix, data_readiness, cost, comparison, evidence_table, reliability, drift_anomaly. Pick the "
+    "few that fit the question (e.g. a frequency question needs comparison + work_order_mix + reliability; a "
+    "cost question needs cost; a 'why blocked' question needs data_readiness). For a reliability / failure-rate "
+    "/ MTBF / RUL / 'why does it keep failing' question, select reliability. For an 'is it getting worse / "
+    "trending / accelerating / a bad actor vs peers / cost outlier' question, select drift_anomaly. For anything about work "
+    "orders / the breakdown / individual records / 'all work orders' / 'list them' / details, select "
+    "evidence_table (it has a Summary/Detailed toggle - the individual per-order and per-notification "
+    "records live under its Detailed tab); add work_order_mix for the chart if a visual helps. (The "
+    "deterministic tool trace + SQL are NOT an artifact - they render automatically in the Governance "
+    "Trace tab.)\n"
     "Return strictly JSON with only the fields you found. No prose, no code fences."
 )
 

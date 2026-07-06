@@ -1,13 +1,16 @@
-"""LangChain tool wrappers for the MAX Agent conversational orchestration layer.
+"""READ-ONLY LangChain tools for the MAX Agent FREE-FLOW loop.
 
-These are READ-ONLY tools the LLM planner (agent_loop) may call to answer a user's question about an
-asset whose governance decision has ALREADY been computed deterministically. `governed_decision`
-returns that authoritative result; the planner must cite it and never contradict it. No tool here
-decides a gate, a label, or writes anything - the governance fence the finance agent lacks.
+These are the tools the FREE-FLOW loop (agent_loop.run_free_flow_agent) may call to answer a follow-up
+about the asset whose governance decision has ALREADY been computed deterministically. `governed_decision`
+returns that authoritative result; the model must cite it and never contradict it. Every tool here is
+READ-ONLY: it reads the frozen decision or fetches scoped evidence/reliability/comparison/BOM/portfolio.
+NONE decides a gate or a label, re-runs oxy_gate_check, or writes anything - so free-flow can explore and
+explain but can never mint a new decision (a fresh decision goes through the governed lane).
 
 Built as a factory that closes over the locked run context (mirrors the finance agent's make_*_tools
 pattern). langchain_core is imported lazily so this package stays importable, and the app runs in
-deterministic-only mode, when the agentic stack is not installed.
+deterministic-only mode, when the agentic stack is not installed. The old FULL compute registry
+(make_orchestration_tools) + enforce_mandatory were removed to prototypes/removed_governed_agentic_loop.py.
 """
 
 from __future__ import annotations
@@ -16,7 +19,10 @@ from typing import Any, Dict, List
 
 
 def make_agent_tools(agent, result: Dict[str, Any]) -> List[Any]:
-    """Return the read-only LangChain tools for one governed run. Requires langchain_core (lazy)."""
+    """Return the read-only LangChain tools bound to one governed result. Requires langchain_core (lazy).
+
+    Used by the FREE-FLOW loop (bound to the LAST governed result). Every tool reads the frozen decision
+    or fetches scoped evidence; none re-runs the gate or re-decides."""
     from langchain_core.tools import tool  # lazy: only needed when the agentic stack is present
 
     scope = result.get("scope", {}) or {}
@@ -44,9 +50,12 @@ def make_agent_tools(agent, result: Dict[str, Any]) -> List[Any]:
         """Scoped evidence for THIS asset to answer a data question (work orders, cost, findings).
         Always scoped to the locked equipment; never runs unscoped. Args: question (natural language)."""
         from .tools import genie_query_scoped
+        # Forward in_scope so free-flow evidence gets the SAME out-of-scope guard the governed lane has: an
+        # out-of-scope prior result must never trigger a scoped Genie read (genie_query_scoped fails closed).
         env = genie_query_scoped(
             question,
-            {"equipment_id": eid, "time_window": time_window, "scope_validated": scope.get("scope_validated", True)},
+            {"equipment_id": eid, "time_window": time_window,
+             "scope_validated": scope.get("scope_validated", True), "in_scope": scope.get("in_scope")},
             client=agent.client,
         )
         d = env.get("data", {})
@@ -85,6 +94,48 @@ def make_agent_tools(agent, result: Dict[str, Any]) -> List[Any]:
         return out or {"note": "readiness not available (asset is out of analysis scope)"}
 
     @tool
+    def reliability() -> dict:
+        """Reliability EVIDENCE for this asset: MTBF/MTTR/availability, the Weibull failure-hazard shape
+        + P(fail)/RUL, and the top failure modes. Read-only evidence - it does NOT change the gate or
+        label, and the judgment thresholds are BU-defined/unset."""
+        rel = result.get("reliability") or {}
+        return {"metrics": rel.get("metrics"), "weibull": rel.get("weibull"),
+                "failure_modes": rel.get("failure_modes"),
+                "interpretation": result.get("reliability_interpretation")}
+
+    @tool
+    def parts_bom() -> dict:
+        """Spare parts / BOM completeness for this asset: which components its PM task list links vs the
+        components like equipment carry, and any missing ones. Read-only evidence - a gap supports the
+        ADD_COMPONENT recommendation but does NOT change the gate or label."""
+        bom = result.get("bom_completeness") or {}
+        return {"bom_completeness": bom.get("bom_completeness"), "coverage_pct": bom.get("coverage_pct"),
+                "components_linked": bom.get("components_linked"), "components_expected": bom.get("components_expected"),
+                "components_missing": bom.get("components_missing"), "interpretation": bom.get("interpretation")}
+
+    @tool
+    def reliability_drift() -> dict:
+        """SAP-transactional drift / anomaly EVIDENCE for this asset: failure-interval drift + trend,
+        MTTR drift (fail-closed on Oxy's all-zero Breakdown_Duration), reactive-work-mix level + trend,
+        and a cohort bad-actor outlier. Read-only evidence - each signal reports an arithmetic statistic
+        and a CANDIDATE recommendation type, but it does NOT change the gate or label, and every
+        actionability threshold is BU-defined/unset."""
+        drift = result.get("reliability_drift") or {}
+        return {"any_drift_flag": drift.get("any_drift_flag"), "flagged_signals": drift.get("flagged_signals"),
+                "signals": drift.get("signals"), "interpretation": drift.get("interpretation")}
+
+    @tool
+    def cost_distribution() -> dict:
+        """Maintenance-cost distribution EVIDENCE for this asset: own P10/P50/P90 bands + any cohort-cost
+        outlier, on material/services cost only (Oxy labor actuals are ~0, so NO labor-cost or savings
+        claim is made). Read-only evidence; whether a P90 exceedance is actionable is BU-defined/unset."""
+        cost = result.get("cost_distribution") or {}
+        return {"computable": cost.get("computable"), "cost_p10": cost.get("cost_p10"),
+                "cost_p50": cost.get("cost_p50"), "cost_p90": cost.get("cost_p90"),
+                "cohort_cost_outlier": cost.get("cohort_cost_outlier"), "cost_basis": cost.get("cost_basis"),
+                "savings_claim_allowed": cost.get("savings_claim_allowed"), "interpretation": cost.get("interpretation")}
+
+    @tool
     def portfolio_health() -> dict:
         """Fleet-level PM health across the scoped population: gate-status distribution, blocked count,
         and the top triage rows. Read-only; counts only, no realized-savings implied."""
@@ -95,161 +146,47 @@ def make_agent_tools(agent, result: Dict[str, Any]) -> List[Any]:
             "triage_top": ph["triage"]["queue"][:5],
         }
 
-    return [governed_decision, evidence, like_equipment_comparison, execution_readiness, portfolio_health]
+    return [governed_decision, evidence, like_equipment_comparison, execution_readiness, reliability,
+            parts_bom, reliability_drift, cost_distribution, portfolio_health]
 
 
-# ---------------------------------------------------------------------------
-# Orchestration tools: the AI SELECTS and SEQUENCES these; each one CALLS a real deterministic tool
-# (parameterized by the locked asset) and stores its output in a shared run-state. Dependencies
-# auto-resolve (gate needs a recommendation needs a classification needs scope), so the AI can call
-# them in any order. The tools compute the deterministic outputs; the AI never fabricates them.
-# ---------------------------------------------------------------------------
-_MANDATORY = ("lock_scope", "classify_effectiveness", "run_oxy_gate")
-
-
-def make_orchestration_tools(agent, asset: Dict[str, Any], state: Dict[str, Any]) -> List[Any]:
-    """Real deterministic tools exposed for AI tool-calling. `state` is shared across the run."""
+def make_gate_preview_tool(agent, asset: Dict[str, Any]):
+    """An ADVISORY, READ-ONLY gate-preview tool for the free-flow GATE_CHECK branch. It runs the REAL
+    deterministic oxy_gate_check on a HYPOTHETICAL change for this asset and returns the verdict, clearly
+    marked advisory. It does NOT produce the authoritative governed decision, draft a package, or record
+    an approval - a governed review is still required to make any change official."""
     from langchain_core.tools import tool  # lazy
 
-    from .tools import (
-        resolve_context, validate_scope, genie_query_scoped, run_scoped_sql,
-        pm_effectiveness_classifier, data_readiness_gate, risk_business_justification,
-        recommend_strategy_change, oxy_gate_check, like_equipment_matcher, pm_comparison_engine,
-        task_list_bom_readiness, cbm_measurement_readiness,
-    )
-    from .sql_templates import local_synthetic_executor
+    from .tools import oxy_gate_check, resolve_context, validate_scope
 
     profile = agent.bu_profile
     crit = asset["master_data"]["criticality"]
     pm_gov = asset["pm_governance"]
-    tw = state.get("time_window", "LAST_24_MONTHS")
-
-    # --- plain dependency resolvers (deterministic; not exposed as tools) ---
-    def _ctx():
-        if "context" not in state:
-            env = resolve_context(
-                equipment_id=asset["equipment_id"], functional_location_id=asset["functional_location_id"],
-                plant=asset["plant"], business_unit=asset["business_unit"], bu_profile_id=profile["profile_id"],
-                asset_class=asset["asset_class"], time_window=tw,
-                pm_strategy_type=asset["current_strategy"]["strategy_type"], pm_id=asset["pm_id"])
-            state["context"] = env["data"]["context"]
-        return state["context"]
-
-    def _scope():
-        if "scope" not in state:
-            state["scope"] = validate_scope(_ctx(), profile, asset["master_data"])["data"]
-        return state["scope"]
-
-    def _clf():
-        if "classifier" not in state:
-            state["classifier"] = pm_effectiveness_classifier(
-                _ctx(), profile, crit, pm_gov, asset["pm_attributes"],
-                asset["effectiveness_signals"], asset["evidence_readiness"])["data"]
-        return state["classifier"]
-
-    def _rec():
-        if "recommendation" not in state:
-            state["recommendation"] = recommend_strategy_change(
-                classifier_label=_clf()["label"], data_readiness=asset["readiness"]["data_readiness"],
-                risk=asset["risk"], comparison=asset.get("comparison", {}), criticality=crit,
-                pm_governance=pm_gov, readiness=asset["readiness"], bu_profile=profile)["data"]["recommendation"]
-        return state["recommendation"]
-
-    def _gate():
-        if "gate" not in state:
-            rec = _rec()
-            env = oxy_gate_check(_ctx(), _scope(), profile, crit, pm_gov,
-                                 {"type": rec.get("type"), "direction": rec.get("direction")},
-                                 asset["readiness"], asset["risk"], asset["approval"],
-                                 asset["approval_state"], asset["requested_action"])
-            state["gate"] = env["data"]
-            state["gate_reason"] = env.get("blocked_reason") or env["data"].get("review_trigger")
-        return state["gate"]
 
     @tool
-    def lock_scope() -> dict:
-        """Resolve context and validate scope (operated/JV, exemptions). Run this FIRST for any asset."""
-        s = _scope()
-        return {"scope_validated": s.get("scope_validated"), "in_scope": s.get("in_scope"),
-                "provenance": s.get("provenance"), "blocked_reason": s.get("blocked_reason")}
+    def preview_gate_check(change_type: str, direction: str = "") -> dict:
+        """ADVISORY preview: would a hypothetical change clear the Oxy governance gate for this asset? Runs
+        the real deterministic oxy_gate_check READ-ONLY. Args: change_type (e.g. PM_FREQUENCY_CHANGE,
+        RETIRE_PM, MOVE_TO_RTF, TASK_LIST_CLEANUP, ADD_CBM, ADD_COMPONENT), direction (EXTEND / SHORTEN / '').
+        This is NOT the authoritative decision and drafts nothing - a governed review is still required."""
+        ctx = resolve_context(
+            equipment_id=asset["equipment_id"], functional_location_id=asset["functional_location_id"],
+            plant=asset["plant"], business_unit=asset["business_unit"], bu_profile_id=profile["profile_id"],
+            asset_class=asset["asset_class"], time_window="LAST_24_MONTHS",
+            pm_strategy_type=asset["current_strategy"]["strategy_type"], pm_id=asset["pm_id"])["data"]["context"]
+        scope = validate_scope(ctx, profile, asset["master_data"])["data"]
+        proposed = {"type": change_type, "direction": (direction or None)}
+        env = oxy_gate_check(ctx, scope, profile, crit, pm_gov, proposed, asset["readiness"],
+                             asset["risk"], asset["approval"], asset["approval_state"], asset["requested_action"])
+        g = env["data"]
+        return {
+            "advisory": True,
+            "hypothetical_change": {"type": change_type, "direction": direction or None},
+            "gate_status": g.get("gate_status"),
+            "reason": env.get("blocked_reason") or g.get("review_trigger"),
+            "required_approvers": g.get("required_approvers", []),
+            "note": ("ADVISORY preview only - NOT the governed decision. It drafts nothing and approves "
+                     "nothing; a governed review is required to make any change official."),
+        }
 
-    @tool
-    def retrieve_evidence(question: str) -> dict:
-        """Retrieve SCOPED evidence for this asset (work orders, cost, findings) to answer a data
-        question. Always filtered to the locked equipment; never runs unscoped."""
-        sc = _scope()
-        scope = {"equipment_id": asset["equipment_id"], "time_window": tw, "scope_validated": sc.get("scope_validated", True)}
-        ex = agent.client.sql_executor() or local_synthetic_executor(agent._fleet_index)
-        ev = {t: run_scoped_sql(t, scope, {"equipment_id": asset["equipment_id"], "time_window": tw}, executor=ex)["data"].get("records", [])
-              for t in ("work_order_history", "cost_summary", "notification_findings")}
-        genie = genie_query_scoped(question, scope, client=agent.client)["data"]
-        state["evidence"] = ev
-        return {"work_order_history": ev["work_order_history"], "cost_summary": ev["cost_summary"],
-                "notification_findings": ev["notification_findings"], "genie_bound": genie.get("genie_bound")}
-
-    @tool
-    def classify_effectiveness() -> dict:
-        """Run the deterministic PM-effectiveness classifier (describe-and-flag under null thresholds)."""
-        c = _clf()
-        return {"label": c["label"], "thresholds_status": c.get("thresholds_status"), "protected": c.get("protected")}
-
-    @tool
-    def check_data_readiness() -> dict:
-        """Run the deterministic per-domain data-readiness gate."""
-        rd = data_readiness_gate("PM_EFFECTIVENESS_CLASSIFICATION", asset["data_domain_status"], crit, _scope().get("provenance", "SYNTHETIC"))["data"]
-        return {"data_readiness": rd.get("data_readiness"), "action": rd.get("action"), "missing_domains": rd.get("missing_domains")}
-
-    @tool
-    def recommend_change() -> dict:
-        """Form MAX's deterministic recommendation from classifier + readiness + risk. It never
-        recommends a reduce/retire on a mandatory PM; keep-coverage improvements route to review."""
-        return dict(_rec())
-
-    @tool
-    def run_oxy_gate() -> dict:
-        """Run the deterministic Oxy governance gate on MAX's recommendation. This is the AUTHORITATIVE
-        gate result (PASS / REVIEW_REQUIRED / BLOCKED / DRAFT_ONLY); do not infer it yourself."""
-        g = _gate()
-        return {"gate_status": g.get("gate_status"), "reason": state.get("gate_reason"),
-                "required_approvers": g.get("required_approvers", [])}
-
-    @tool
-    def execution_readiness() -> dict:
-        """Check execution readiness (task list / object dependency; CBM fails closed without readings)."""
-        r = asset["readiness"]
-        tl = task_list_bom_readiness(r, crit, profile)["data"]
-        cbm = cbm_measurement_readiness(r)["data"]
-        return {"task_list_readiness": tl.get("task_list_readiness"), "cbm_readiness": cbm.get("cbm_readiness")}
-
-    @tool
-    def compare_like_equipment() -> dict:
-        """Compare this asset's PM to like equipment (same class) for standardization candidates."""
-        fleet = list(agent._fleet_index.values())
-        cohort = like_equipment_matcher(asset, fleet)["data"]["cohort"]
-        cohort_assets = [agent._fleet_index[c["equipment_id"]] for c in cohort]
-        cmp = pm_comparison_engine(asset, cohort_assets)["data"]
-        return {"cohort": cohort, "standardization_candidates": cmp.get("standardization_candidates", [])}
-
-    @tool
-    def portfolio_health() -> dict:
-        """Fleet-level PM health: gate-status distribution + top triage rows. Counts only, no savings."""
-        ph = agent.portfolio_health()
-        return {"by_gate_status": ph["metrics"]["by_gate_status"], "triage_top": ph["triage"]["queue"][:5]}
-
-    return [lock_scope, retrieve_evidence, classify_effectiveness, check_data_readiness,
-            recommend_change, run_oxy_gate, execution_readiness, compare_like_equipment, portfolio_health]
-
-
-def enforce_mandatory(agent, asset: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
-    """The FENCE: guarantee scope -> classifier -> gate ran (run them if the AI skipped them) and
-    return their authoritative deterministic outputs. Called after the AI's tool-calling turn so the
-    governed decision is deterministic no matter what the AI did or narrated."""
-    tools = {t.name: t for t in make_orchestration_tools(agent, asset, state)}
-    for name in _MANDATORY:
-        if name == "lock_scope" and "scope" not in state:
-            tools["lock_scope"].invoke({})
-        elif name == "classify_effectiveness" and "classifier" not in state:
-            tools["classify_effectiveness"].invoke({})
-        elif name == "run_oxy_gate" and "gate" not in state:
-            tools["run_oxy_gate"].invoke({})
-    return {"scope": state.get("scope"), "classifier": state.get("classifier"), "gate": state.get("gate")}
+    return preview_gate_check

@@ -35,7 +35,7 @@ _SCOPE_COLUMNS = {
     "equipment_id": ("equipment_id",),
     "functional_location_id": ("functional_location_id", "floc_id", "functional_location"),
     "plant": ("plant",),
-    "time_window": ("posting_date", "created_on", "reading_date", "start_date", "date"),
+    "time_window": ("time_window", "posting_date", "created_on", "reading_date", "start_date", "date"),
     "business_unit": ("business_unit", "bu", "bu_id"),
 }
 
@@ -53,18 +53,27 @@ def _short_relation(name: str) -> str:
     return name.split(".")[-1].strip().lower()
 
 
+def _bound_in_clause(body_low: str, col: str) -> bool:
+    """Accept only IN-lists that are fully parameter-bound, e.g. ``col IN (:p1, :p2)``."""
+    for match in re.finditer(rf"\b{col}\s+in\s*\(([^)]*)\)", body_low):
+        contents = match.group(1).strip()
+        if re.fullmatch(r":\w+(?:\s*,\s*:\w+)*", contents):
+            return True
+    return False
+
+
 def _scope_bound(body_low: str, cols, value) -> bool:
     """True only if one of `cols` is VALUE-BOUND to the locked scope in the SQL.
 
-    Accepts a server-side bind (`col = :param` / `col op :param`), an `IN (...)`, or an equality to
-    the actual scope value. It deliberately does NOT accept `col IS [NOT] NULL` or a bare column
-    mention - those pass the column name but leave the query unbound to this asset/window.
+    Accepts a server-side bind (`col = :param` / `col op :param`), a fully bound `IN (:param, ...)`,
+    or an equality to the actual scope value. It deliberately does NOT accept `col IS [NOT] NULL`,
+    a bare column mention, or inlined literals in an IN-list.
     """
     for c in cols:
         c = re.escape(c.lower())
         if re.search(rf"\b{c}\s*(?:>=|<=|=|>|<)\s*:", body_low):  # col op :param  (server-bound)
             return True
-        if re.search(rf"\b{c}\s+in\s*\(", body_low):              # col IN ( ... )
+        if _bound_in_clause(body_low, c):                          # col IN (:p1, :p2)
             return True
         if value is not None and re.search(rf"\b{c}\s*=\s*'{re.escape(str(value).lower())}'", body_low):
             return True                                            # col = 'the actual scope value'
@@ -133,7 +142,7 @@ def validate_generated_sql(
     # 4. scope filter present AND VALUE-BOUND: each locked predicate must be bound to its scope value
     # (a param bind, IN(...), or equality to the value) - not merely have its column name appear.
     low = body.lower()
-    result["row_cap_present"] = bool(re.search(r"\blimit\s+\d+", low))
+    result["row_cap_present"] = bool(re.search(r"\blimit\s+(?::\w+|\d+)", low))
     if scope_predicates:
         missing = [p for p in scope_predicates
                    if not _scope_bound(low, _SCOPE_COLUMNS.get(p, (p,)), scope.get(p))]

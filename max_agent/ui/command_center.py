@@ -13,10 +13,11 @@ All values are governed: the queue comes from portfolio_health(); the preview fr
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from dash import dash_table, dcc, html
 
+from .artifacts import render_why
 from .theme import COLORS, MUTED, STATUS_COLORS
 
 # Priority tiles: key -> (label, description, accent colour).
@@ -172,23 +173,21 @@ def _pill(text: str, color: str) -> html.Span:
                                           "background": color, "color": "white", "fontSize": "11px", "fontWeight": 700})
 
 
-def render_pm_preview(result: Dict[str, Any], actions: bool = True) -> html.Div:
+def render_pm_preview(result: Dict[str, Any], actions: bool = True, narrative: Optional[str] = None) -> html.Div:
     """PM preview. actions=True: the Command Center slide-over (close + Ask/Studio CTAs).
-    actions=False: the read-only Ask MAX 'Preview' tab (no CTA ids, so no duplicate-id clash)."""
+    actions=False: the read-only Ask MAX 'Preview' tab (no CTA ids, so no duplicate-id clash).
+    `narrative` is MAX's assessment paragraph (LLM when bound); falls back to a deterministic one."""
     if not result or result.get("error"):
         return html.Div()
     eid = result.get("equipment_id")
     gate = result.get("gate_status")
     label = result.get("classifier_label")
     reason = result.get("gate_reason") or result.get("gate_review_trigger") or "-"
-    rationale = result.get("recommendation_rationale") or "-"
     current_pm = (result.get("proposed_summary") or "").split(" -> ")[0] or "-"
-    allowed = result.get("allowed_next_actions") or []
-    blocked = result.get("blocked_actions") or []
     gate_color = STATUS_COLORS.get(gate, COLORS["muted"])
-    protected = result.get("do_not_optimize") or label == "Governance Review Required"
-    oxy_ctx = ("Criticality / mandatory-protected PM; human review required; MAX cannot write SAP."
-               if protected else "Draft-only in Wave 1; humans approve; MAX cannot write SAP.")
+    if narrative is None:
+        from ..prompts import preview_summary
+        narrative = preview_summary(result)
 
     header_kids = [html.Div(f"{eid}  PM Review Preview", style={"fontSize": "15px", "fontWeight": 800, "color": COLORS["ink"]})]
     if actions:
@@ -204,19 +203,11 @@ def render_pm_preview(result: Dict[str, Any], actions: bool = True) -> html.Div:
         _line("Criticality", f"{result.get('criticality_code')} {result.get('criticality_label') or ''}".strip()),
         _line("Current PM", current_pm),
         _line("Classification", label),
-        html.Hr(style={"border": "none", "borderTop": f"1px solid {COLORS['line']}", "margin": "10px 0"}),
-        html.Div([html.Span("Gate  ", style={"color": COLORS["muted"], "fontSize": "12px"}), _pill(gate, gate_color)]),
         _line("Reason", reason),
-        html.Div("Plain-language reason", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px"}),
-        html.Div(rationale, style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
-        html.Div("Oxy context", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px", "color": COLORS["oxy"]}),
-        html.Div(oxy_ctx, style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
-        html.Div("Allowed next action", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px", "color": "#15803d"}),
-        html.Div(", ".join(allowed) if allowed else (result.get("recommendation_next_action") or "-"),
-                 style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
-        html.Div("Blocked action", style={"fontWeight": 700, "fontSize": "12px", "marginTop": "10px", "color": "#c1261b"}),
-        html.Div(", ".join(blocked) if blocked else "Direct SAP update / unattended reduction",
-                 style={"fontSize": "13px", "color": COLORS["ink"], "margin": "3px 0"}),
+        html.Hr(style={"border": "none", "borderTop": f"1px solid {COLORS['line']}", "margin": "12px 0 6px"}),
+        # The SAME governed synthesis block as the Studio's 'Why MAX recommended this' (narrative +
+        # evidence cited + required approvers) so the Command Center preview reads identically to panel 3.
+        render_why(result, narrative),
     ]
     if actions:
         children += [

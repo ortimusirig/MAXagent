@@ -27,7 +27,7 @@ def test_default_floor_when_nothing_selected():
 def test_renders_only_selected():
     r = _result()
     assert len(render_artifacts(r, ["cost"]).children) == 1
-    assert len(render_artifacts(r, ["comparison", "gate_trace"]).children) == 2
+    assert len(render_artifacts(r, ["comparison", "cost"]).children) == 2
 
 
 def test_invalid_selection_falls_back_to_default():

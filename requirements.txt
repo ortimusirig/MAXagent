@@ -16,9 +16,11 @@ numpy>=1.24.0
 databricks-sdk>=0.30.0
 databricks-sql-connector>=3.0.0
 
-# LLM tool-calling orchestration (optional; imported lazily in agent_loop.py). Sonnet selects +
-# sequences the deterministic tools via a manual bind_tools loop (no langgraph - avoids its version
-# fragility). Without these packages (or an endpoint) the app runs the sanctioned deterministic mode.
+# FREE-FLOW read-only tool loop (optional; imported lazily in agent_loop.py). On a follow-up, the bound
+# model may SELECT and RUN the READ-ONLY tools (read the last decision + fetch evidence) via a manual
+# bind_tools loop (no langgraph - avoids its version fragility); it never re-runs the gate. The GOVERNED
+# lane does NOT use these (it is deterministic + a single guarded narration). Without these packages (or
+# an endpoint) free-flow falls back to a single conversational / deterministic answer.
 databricks-langchain>=0.1.0
 langchain-core>=0.3.0
 
