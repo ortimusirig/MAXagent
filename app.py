@@ -599,8 +599,15 @@ def on_studio(workspace, equipment_id, time_window, review_type, audit):
     hide = {"display": "none"}
     if not equipment_id:
         return render_studio(None), hide
-    result = agent.run(equipment_id, actor=_current_actor(), time_window=time_window, review_type=review_type)
-    return render_studio(result, audit=audit or [], narrative=agent.preview_narrative(result)), hide
+    # ALWAYS hide the overlay, even if the review errors - a stuck full-screen overlay would silently
+    # block every click (looks like "the tabs stopped working").
+    try:
+        result = agent.run(equipment_id, actor=_current_actor(), time_window=time_window, review_type=review_type)
+        return render_studio(result, audit=audit or [], narrative=agent.preview_narrative(result)), hide
+    except Exception:
+        err = html.Div("MAX could not load this PM's review. Try another PM, or reload the page.",
+                       style={"padding": "18px 22px", "color": "#b42318", "fontSize": "14px", "fontWeight": 600})
+        return err, hide
 
 
 # Show the busy overlay the instant a Studio populate is triggered (workspace is studio AND an asset is
@@ -610,7 +617,19 @@ def on_studio(workspace, equipment_id, time_window, review_type, audit):
 app.clientside_callback(
     """
     function(workspace, asset, tw, rt) {
-        if (workspace === 'studio' && asset) { return {display: 'flex'}; }
+        if (workspace === 'studio' && asset) {
+            var ov = document.getElementById('busy-overlay');
+            if (ov) {
+                // Failsafe: the overlay must NEVER block clicks indefinitely. If the server callback
+                // fails to hide it (error, hang, dropped response), force it hidden after 12s.
+                if (window.__ovFailsafe) { clearTimeout(window.__ovFailsafe); }
+                window.__ovFailsafe = setTimeout(function () {
+                    var o = document.getElementById('busy-overlay');
+                    if (o) { o.style.display = 'none'; }
+                }, 12000);
+            }
+            return {display: 'flex'};
+        }
         return window.dash_clientside.no_update;
     }
     """,
