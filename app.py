@@ -580,6 +580,7 @@ def on_priority(*args):
 
 @app.callback(
     Output("studio-body", "children"),
+    Output("busy-overlay", "style", allow_duplicate=True),  # hide the loading overlay once the review renders
     Input("workspace", "data"),
     Input("asset-dropdown", "value"),
     Input("time-window", "value"),
@@ -591,13 +592,35 @@ def on_studio(workspace, equipment_id, time_window, review_type, audit):
     """Fill the Work Strategy Studio for the selected scope. Studio is standalone: its own Asset / Time
     window / Review type filters drive the governed review directly (a Command Center drill-in or a chat
     just set the same shared dropdowns). Renders only when Studio is on screen so the run/narrative cost
-    is not paid while browsing another workspace."""
+    is not paid while browsing another workspace. The full-screen busy overlay is shown by a clientside
+    callback while the review is in flight; this callback hides it once the render is ready."""
     if workspace != "studio":
-        return no_update
+        return no_update, no_update  # not on screen: leave both the body and the overlay untouched
+    hide = {"display": "none"}
     if not equipment_id:
-        return render_studio(None)
+        return render_studio(None), hide
     result = agent.run(equipment_id, actor=_current_actor(), time_window=time_window, review_type=review_type)
-    return render_studio(result, audit=audit or [], narrative=agent.preview_narrative(result))
+    return render_studio(result, audit=audit or [], narrative=agent.preview_narrative(result)), hide
+
+
+# Show the busy overlay the instant a Studio populate is triggered (workspace is studio AND an asset is
+# set), so the load lag has feedback. Clientside so it paints before the server review call starts; it
+# returns no_update on plain tab switches (workspace != studio), so navigation never flashes the overlay.
+# on_studio (above) clears it when the review renders.
+app.clientside_callback(
+    """
+    function(workspace, asset, tw, rt) {
+        if (workspace === 'studio' && asset) { return {display: 'flex'}; }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("busy-overlay", "style", allow_duplicate=True),
+    Input("workspace", "data"),
+    Input("asset-dropdown", "value"),
+    Input("time-window", "value"),
+    Input("review-type", "value"),
+    prevent_initial_call=True,
+)
 
 
 # (inline button type -> UI action label, canonical workflow transition).
