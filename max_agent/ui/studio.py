@@ -20,11 +20,10 @@ from ..labels import change_label, interval_verdict, recommendation_checks
 from .artifacts import (
     badge,
     render_context_bar,
-    render_governed_action,
     render_sap_package,
     render_why,
 )
-from .theme import CARD, COLORS, H2, MUTED, STATUS_COLORS
+from .theme import CARD, COLORS, MUTED, STATUS_COLORS
 
 
 def _empty() -> html.Div:
@@ -81,16 +80,16 @@ def _why(result: Dict[str, Any], narrative: str) -> html.Div:
     return html.Div([render_why(result, narrative)], style=CARD)
 
 
-def _actions(result: Dict[str, Any], audit: List[Dict[str, Any]]) -> html.Div:
+def _actions(result: Dict[str, Any]) -> html.Div:
+    # No approval workflow in MAX - the approve/reject/audit-trail steps happen in SAP, not here. This
+    # section keeps only the drafted SAP change package (read-only; MAX never writes SAP).
     return html.Div([
-        html.Div("Draft and SAP actions", style={**H2, "marginTop": "2px"}),
-        render_governed_action(result, audit),
         html.Details([
-            html.Summary("SAP change package details (draft)",
+            html.Summary("SAP change package (draft)",
                          style={"cursor": "pointer", "fontWeight": 700, "fontSize": "13px",
                                 "color": COLORS["oxy"], "padding": "8px 0"}),
             render_sap_package(result, with_controls=False),
-        ], style={"marginTop": "6px"}),
+        ], open=True, style={"marginTop": "2px"}),
     ])
 
 
@@ -104,6 +103,6 @@ def render_studio(result: Dict[str, Any], audit: List[Dict[str, Any]] = None, na
         html.Div([
             _hero(result),
             _why(result, narrative),
-            _actions(result, audit or []),
+            _actions(result),
         ], style={"padding": "16px 22px"}),
     ])

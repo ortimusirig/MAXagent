@@ -37,10 +37,13 @@ def test_empty_state_when_no_pm():
     assert "approve-btn" not in _ids(empty)
 
 
-def test_governed_controls_present_exactly_once():
+def test_no_approval_workflow_controls():
+    # Approval happens in SAP, not in MAX: the governed approve/reject/audit-trail controls are removed.
     ids = _ids(render_studio(_result(), audit=[]))
     for cid in ("approve-btn", "request-btn", "reject-btn", "approval-comment", "approval-trail"):
-        assert ids.count(cid) == 1, f"{cid} should appear exactly once, got {ids.count(cid)}"
+        assert cid not in ids, f"{cid} should be removed"
+    # ...but the drafted SAP change package is still shown.
+    assert "SAP change package (draft)" in str(render_studio(_result(), audit=[]))
 
 
 def test_leads_with_recommendation_and_is_draft_only():
