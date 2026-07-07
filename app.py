@@ -17,7 +17,7 @@ from dash import ALL, MATCH, Dash, Input, Output, State, ctx, dcc, html, no_upda
 from flask import request
 
 from max_agent.orchestrator import MaxAgent
-from max_agent.intent import resolve_asset_from_text
+from max_agent.intent import is_fleet_question, resolve_asset_from_text
 from max_agent.ui.artifact_catalog import preview_empty, render_artifact_history, render_trace_history
 from max_agent.ui.artifacts import _audit_trail, render_context_bar
 from max_agent.ui.studio import render_studio
@@ -148,6 +148,35 @@ def render_workspace(workspace):
     )
 
 
+def _portfolio_answer(rows, question: str) -> str:
+    """A fleet-scope answer: the ranked list of PMs currently needing attention, reusing the same
+    portfolio data the Command Center queue shows. Read-only; runs no governed pipeline."""
+    from max_agent.labels import gate_label, reason_label
+    rows = rows or []
+    total = len(rows)
+    # "At risk / of concern" = the PMs whose gate is not cleared (Blocked / Review / Draft-only). A
+    # PASS (cleared-to-draft) PM is not at risk, so it is not listed here.
+    attention = [r for r in rows if r.get("gate_status") in ("BLOCKED", "REVIEW_REQUIRED", "DRAFT_ONLY")]
+    if not attention:
+        return f"No PMs are currently at risk - all {total} in the fleet are cleared to draft."
+    counts: dict = {}
+    for r in attention:
+        g = r.get("gate_status") or "-"
+        counts[g] = counts.get(g, 0) + 1
+    lines = []
+    for i, r in enumerate(attention[:12], 1):
+        eid, pm = r.get("equipment_id"), r.get("pm_id")
+        g = gate_label(r.get("gate_status"))
+        why = r.get("gate_reason") or r.get("label") or ""
+        why = reason_label(why) if why else ""
+        lines.append(f"{i}. **{eid}** ({pm}) - {g}" + (f" ({why})" if why else ""))
+    summary = ", ".join(f"{v} {gate_label(k)}" for k, v in counts.items())
+    header = f"**{len(attention)} of {total} PMs currently need attention** ({summary}), highest-attention first:"
+    footer = (f"\n\nOpen any one in the Command Center, or ask e.g. \"review {attention[0].get('equipment_id')}\" "
+              "to drill into its governed review.")
+    return header + "\n\n" + "\n".join(lines) + footer
+
+
 @app.callback(
     Output("chat-status", "children"),
     Input("thinking-interval", "n_intervals"),
@@ -189,6 +218,13 @@ def on_context(equipment_id, time_window, review_type, chat_question, chat_artif
     if "chat-question" in triggered and chat_question:
         r = resolve_asset_from_text(chat_question, agent._fleet_index)
         reid = r.get("equipment_id")
+        # Fleet / portfolio question (no specific asset named) -> answer with the ranked at-risk list,
+        # reusing the Command Center portfolio data, instead of falling back to a single governed run.
+        if reid is None and is_fleet_question(chat_question):
+            _prog_done(sid)
+            ans = _portfolio_answer(PORTFOLIO_HEALTH.get("rows", []), chat_question)
+            return (no_update, (messages or []) + [{"role": "assistant", "summary": ans}],
+                    no_update, no_update, no_update, no_update, no_update)
         if reid is None and r.get("candidates"):
             _prog_done(sid)
             choices = ", ".join(r.get("candidates", [])[:8])

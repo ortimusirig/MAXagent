@@ -20,6 +20,25 @@ _KEYWORD_CLASS = {
 }
 
 
+# Fleet / portfolio phrasing: a question about the WHOLE fleet ("which PMs are at risk", "what needs
+# attention", "top/worst PMs") rather than one asset. Used to route to the portfolio answer instead of
+# a single governed run. Deliberately conservative substrings; the caller only consults this when no
+# specific asset was resolved, so a question naming an asset still goes to that asset's governed review.
+_FLEET_TERMS = (
+    "at risk", "at-risk", "which pm", "what pm", "which pms", "what pms", "all pm", "the pms",
+    "fleet", "portfolio", "worst", "top ", "highest", "of concern", "concerning", "need attention",
+    "needs attention", "needing attention", "flagged", "which asset", "what asset", "which equipment",
+    "which pump", "which compressor", "list the", "how many pm", "overview of", "which ones",
+)
+
+
+def is_fleet_question(text: str) -> bool:
+    """True when the question is fleet/portfolio-scoped (no single asset), so MAX should answer with the
+    ranked at-risk list rather than a single-PM governed review."""
+    t = (text or "").lower()
+    return any(term in t for term in _FLEET_TERMS)
+
+
 def _candidate_result(matched_on: str, candidates):
     return {"equipment_id": None, "matched_on": matched_on, "candidates": list(candidates)}
 

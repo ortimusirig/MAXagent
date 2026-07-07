@@ -114,7 +114,7 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
     right = html.Div([tabs], style={"flex": "1", "padding": "12px", "boxSizing": "border-box", "overflowY": "auto", "background": COLORS["bg"]})
     ws_ask = html.Div([
         hidden_scope,
-        html.Div([left, right], style={"display": "flex", "height": "calc(100vh - 190px)"}),
+        html.Div([left, right], style={"display": "flex", "height": "calc(100vh - 124px)"}),
     ], id="ws-ask", style={"display": "none"})
 
     # --- Work Strategy Studio workspace (governed review; owns the visible scope filter bar) ---
