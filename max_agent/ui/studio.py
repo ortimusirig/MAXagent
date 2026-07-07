@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 from dash import html
 
-from ..labels import change_label, rec_label, rec_meaning
+from ..labels import change_label, interval_verdict, recommendation_checks
 from .artifacts import (
     badge,
     render_context_bar,
@@ -42,28 +42,33 @@ def _hero(result: Dict[str, Any]) -> html.Div:
     rec = result.get("recommendation_type") or "-"
     rec_gate = result.get("recommendation_gate_status")
     rationale = result.get("recommendation_rationale") or "-"
-    next_action = result.get("recommendation_next_action") or "-"
     diverges = result.get("recommendation_diverges")
     change = result.get("change_under_review_type")
+    # Demo: one of three headline verdicts (Shorten / Extend / Retain); the specifics become checks.
+    _vcode, vlabel = interval_verdict(rec)
+    checks = recommendation_checks(result)
     kids = [
         html.Div("MAX recommends", style={"fontSize": "12px", "fontWeight": 700, "color": COLORS["muted"],
                                           "textTransform": "uppercase", "letterSpacing": "0.06em"}),
         html.Div([
-            html.Span(rec_label(rec), style={"fontSize": "24px", "fontWeight": 800, "color": COLORS["oxy"], "marginRight": "12px"}),
+            html.Span(vlabel, style={"fontSize": "24px", "fontWeight": 800, "color": COLORS["oxy"], "marginRight": "12px"}),
             badge(rec_gate, STATUS_COLORS.get(rec_gate, COLORS["muted"])),
         ], style={"display": "flex", "alignItems": "center", "margin": "6px 0 8px"}),
-        # What executing this recommendation means (so the code IMPROVE_TASK_LIST reads as a real action).
-        html.Div(rec_meaning(rec), style={**MUTED, "fontStyle": "italic", "marginBottom": "8px"}) if rec_meaning(rec) else html.Div(),
         html.Div(rationale, style={"fontSize": "14px", "color": COLORS["ink"], "lineHeight": "1.55"}),
-        html.Div([
-            html.Span("Next action: ", style={"fontWeight": 700, "fontSize": "13px", "color": COLORS["ink"]}),
-            html.Span(next_action, style={"fontSize": "13px", "color": COLORS["muted"]}),
-        ], style={"marginTop": "10px"}),
     ]
+    if checks:
+        kids.append(html.Div("Checks", style={"fontSize": "12px", "fontWeight": 700, "color": COLORS["muted"],
+                                              "textTransform": "uppercase", "letterSpacing": "0.06em", "marginTop": "12px"}))
+        kids.append(html.Ul([
+            html.Li([
+                html.Span(c["text"], style={"fontSize": "13px", "fontWeight": 600, "color": COLORS["ink"]}),
+                html.Span(f"  - {c['source']}", style={"fontSize": "12px", "color": COLORS["muted"]}) if c.get("source") else html.Span(),
+            ], style={"margin": "3px 0"}) for c in checks
+        ], style={"margin": "4px 0 4px", "paddingLeft": "18px"}))
     if diverges:
         kids.append(html.Div(
             f"You are reviewing the change '{change_label(change)}', but MAX recommends "
-            f"'{rec_label(rec)}' instead. The SAP package below drafts MAX's recommendation and is "
+            f"'{vlabel}' instead. The SAP package below drafts MAX's recommendation and is "
             "gate-checked on its own.",
             style={"background": "#fff4e5", "border": "1px solid #f0c987", "borderRadius": "8px",
                    "padding": "9px", "fontSize": "12px", "color": "#8a5a00", "marginTop": "12px"},

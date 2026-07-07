@@ -70,6 +70,67 @@ CHANGE_LABELS = {
 }
 
 
+# --- Demo: collapse the recommendation to a 3-way interval verdict + secondary "check X" flags -------
+# The governed engine still emits the full recommendation_type catalog (and the gate/audit use it); this
+# is a PRESENTATION projection only. Every code maps to one of three headlines - Shorten / Extend /
+# Retain - and the specifics (which the engine already computes in data_needs) surface underneath as
+# concrete checks. Retain is the safe default whenever MAX cannot justify a frequency change yet.
+INTERVAL_VERDICT = {
+    "SHORTEN_INTERVAL": ("SHORTEN", "Shorten the interval"),
+    "EXTEND": ("EXTEND", "Extend the interval"),
+    "REDUCE_OR_RETIRE_CANDIDATE": ("EXTEND", "Extend the interval"),
+}
+
+# data_needs 'need' phrase -> short imperative check shown under the verdict
+_CHECK_PHRASE = {
+    "current measurement-point readings": "Check condition / sensor readings",
+    "coded failure notifications (damage / cause / object-part)": "Check failure coding (damage / cause codes)",
+    "posted actual costs on the work orders": "Check labor-cost postings on the work orders",
+    "a validated equipment criticality": "Validate equipment criticality",
+    "failure / breakdown history linked to this equipment": "Check failure / breakdown history",
+    "Oxy-confirmed classifier thresholds (Risk Scorecard)": "Confirm effectiveness thresholds (Risk Scorecard)",
+    "more complete work-order and notification history": "Check work-order / notification coverage",
+}
+# recommendation subtype -> an extra check when the code is not a pure interval move
+_SUBTYPE_CHECK = {
+    "IMPROVE_TASK_LIST": "Review the task-list steps and finding coding",
+    "TASK_LIST_CLEANUP": "Clean up redundant task-list steps",
+    "ADD_COMPONENT": "Check the task-list BOM (missing component)",
+    "ADD_CBM": "Check condition-monitoring readings",
+    "CONVERT_TO_CBM": "Check condition-monitoring readings",
+    "MEASUREMENT_READINESS_FIRST": "Stand up measurement points / readings",
+    "REQUEST_CRITICALITY_VALIDATION": "Validate equipment criticality",
+    "DATA_REMEDIATION": "Check whether the source data is complete",
+    "DATA_CLEANUP": "Clean up the source records",
+}
+
+
+def interval_verdict(code: str) -> Tuple[str, str]:
+    """Collapse a recommendation_type code to (VERDICT, label) where VERDICT is SHORTEN / EXTEND /
+    RETAIN. Anything that is not an explicit shorten/extend/retire defaults to RETAIN (no change)."""
+    return INTERVAL_VERDICT.get(code, ("RETAIN", "Retain the current PM"))
+
+
+def recommendation_checks(result: dict) -> list:
+    """Secondary 'check X' flags behind the 3-way verdict. Built from the specifics the engine already
+    computed (result['data_needs']) plus a subtype-specific check. Returns [{text, source}], capped."""
+    checks: list = []
+    for n in (result.get("data_needs") or []):
+        need = n.get("need", "")
+        text = _CHECK_PHRASE.get(need) or (f"Check {need}" if need else None)
+        if text:
+            checks.append({"text": text, "source": n.get("sap_source", "")})
+    sub = _SUBTYPE_CHECK.get(result.get("recommendation_type"))
+    if sub:
+        checks.append({"text": sub, "source": ""})
+    seen, out = set(), []
+    for c in checks:
+        if c["text"] not in seen:
+            seen.add(c["text"])
+            out.append(c)
+    return out[:4]
+
+
 def _fallback(code: str) -> str:
     return (code or "").replace("_", " ").capitalize() or "-"
 
