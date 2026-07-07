@@ -16,6 +16,7 @@ from __future__ import annotations
 from dash import dcc, html
 
 from ..orchestrator import MaxAgent
+from .artifact_catalog import preview_empty
 from .command_center import render_command_center
 from .dashboard_embed import render_aibi_dashboard
 from .studio import render_studio
@@ -49,13 +50,18 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
 
     header = html.Div([
         html.Div([
-            html.Div("MAX Agent", style={"fontSize": "20px", "fontWeight": 800, "color": "white"}),
-            html.Div("Governed preventive-maintenance strategy copilot for Oxy - draft-only, human-approved",
-                     style={"fontSize": "12px", "color": "#cfe0f3"}),
-        ]),
-        html.Div(f"{mode}  |  default_oxy", style={"fontSize": "12px", "color": "#9fc0e6"}),
-    ], style={"background": COLORS["oxy"], "padding": "14px 22px", "display": "flex",
-              "justifyContent": "space-between", "alignItems": "center"})
+            html.Img(src="/assets/oxy-logo.png", alt="OXY",
+                     style={"height": "32px", "width": "auto", "display": "block"}),
+            html.Div([
+                html.Div("MAX Agent", style={"fontSize": "20px", "fontWeight": 800, "color": COLORS["ink"]}),
+                html.Div("Governed Preventive Maintenance Agent",
+                         style={"fontSize": "12px", "color": COLORS["muted"]}),
+            ]),
+        ], style={"display": "flex", "alignItems": "center", "gap": "12px"}),
+        html.Div(f"{mode}  |  default_oxy", style={"fontSize": "12px", "color": COLORS["muted"]}),
+    ], style={"background": "white", "padding": "14px 22px", "display": "flex",
+              "justifyContent": "space-between", "alignItems": "center",
+              "borderBottom": f"1px solid {COLORS['line']}"})
 
     nav = html.Div([
         html.Button(label, id=f"nav-{key}", n_clicks=0, style=nav_button_style(key == "command"))
@@ -91,8 +97,6 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
                                "background": COLORS["oxy"], "color": "white", "fontWeight": 700, "cursor": "pointer"}),
         ], style={"display": "flex", "gap": "8px", "alignItems": "center",
                   "borderTop": f"1px solid {COLORS['line']}", "paddingTop": "10px"}),
-        html.Div("Straw man: every value is synthetic or PROPOSED; MAX does not decide Oxy policy.",
-                 style={**MUTED, "marginTop": "6px", "fontSize": "11px"}),
     ], style={"width": "34%", "minWidth": "320px", "padding": "18px", "borderRight": f"1px solid {COLORS['line']}",
               "boxSizing": "border-box", "display": "flex", "flexDirection": "column", "height": "100%"})
 
@@ -103,7 +107,8 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
         dcc.Tab(label="Artifacts", value="artifacts", children=html.Div(id="tab-artifacts", style={"padding": "12px"})),
         dcc.Tab(label="Dashboard", value="dashboard",
                 children=html.Div(render_aibi_dashboard(portfolio_health), id="tab-dashboard", style={"padding": "12px"})),
-        dcc.Tab(label="Preview", value="preview", children=html.Div(id="tab-preview", style={"padding": "12px"})),
+        dcc.Tab(label="Preview", value="preview",
+                children=html.Div(preview_empty(), id="tab-preview", style={"padding": "12px"})),
         dcc.Tab(label="Governance Trace", value="trace", children=html.Div(id="tab-trace", style={"padding": "12px"})),
     ])
     right = html.Div([tabs], style={"flex": "1", "padding": "12px", "boxSizing": "border-box", "overflowY": "auto", "background": COLORS["bg"]})
@@ -137,9 +142,20 @@ def build_layout(agent: MaxAgent, portfolio_health: dict) -> html.Div:
         html.Div(render_studio(None), id="studio-body"),
     ], id="ws-studio", style={"display": "none"})
 
+    # Full-screen busy overlay: shown while a PM summarization (AI) call is in-flight. Fixed + full
+    # viewport + top z-index so it covers the tab bar and both panels and intercepts every click
+    # (blocks duplicate row-clicks). Toggled via the callback `running=` arg; positioning lives in
+    # max.css (.busy-overlay); only `display` flips here.
+    busy_overlay = html.Div([
+        html.Div(className="max-spinner"),
+        html.Div("Analyzing and summarizing PM…",
+                 style={"marginTop": "14px", "fontSize": "14px", "fontWeight": 600, "color": COLORS["ink"]}),
+    ], id="busy-overlay", className="busy-overlay", style={"display": "none"})
+
     return html.Div([
-        header, nav, ws_command, ws_ask, ws_studio,
+        header, nav, ws_command, ws_ask, ws_studio, busy_overlay,
         dcc.Store(id="workspace", data="command"),
+        dcc.Store(id="cc-last-eid"),  # last PM asked to summarize (drives Retry after an error)
         dcc.Store(id="cc-active-priority"),
         dcc.Store(id="approval-audit", data=[]),
         dcc.Store(id="chat-question"),

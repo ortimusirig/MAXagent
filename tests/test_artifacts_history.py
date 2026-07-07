@@ -33,7 +33,10 @@ def _hist(n_entries=2):
 
 
 def test_empty_history_shows_guidance():
-    assert "stack here" in str(render_artifact_history([], []))
+    # Empty state: centered icon + short contextual line (shared right-panel empty-state pattern).
+    rendered = str(render_artifact_history([], []))
+    assert "/assets/icons/artifacts.svg" in rendered
+    assert "artifacts appear here" in rendered
 
 
 def test_history_stacks_newest_first_with_headers():

@@ -10,3 +10,4 @@ server.log
 .databricks/
 .idea/
 .vscode/
+.claude/

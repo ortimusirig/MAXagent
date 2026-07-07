@@ -91,10 +91,15 @@ def priority_tile(key: str, value: Any) -> html.Button:
 def _priorities_rail(rows: List[Dict[str, Any]]) -> html.Div:
     counts = _priority_counts(rows)
     return html.Div([
-        html.Div("Review Priorities", style={"fontSize": "16px", "fontWeight": 800, "color": COLORS["ink"]}),
-        html.Div("Click a priority to filter the queue.", style={**MUTED, "marginBottom": "14px"}),
         *[priority_tile(k, counts[k]) for k in PRIORITY_KEYS],
     ], style={"width": "260px", "flex": "0 0 260px", "paddingRight": "18px"})
+
+
+# Columns exported by the queue's Download button (chevron + hidden readiness column omitted), with the
+# same human labels as the on-screen table header.
+QUEUE_EXPORT_COLUMNS = ["rank", "equipment_id", "pm_id", "label", "gate_status", "next_action", "reason"]
+QUEUE_EXPORT_LABELS = {"rank": "#", "equipment_id": "Asset", "pm_id": "PM", "label": "Label",
+                       "gate_status": "Gate", "next_action": "Recommended Next Action", "reason": "Reason"}
 
 
 def _queue_table(rows: List[Dict[str, Any]]) -> dash_table.DataTable:
@@ -137,20 +142,19 @@ def render_command_center(portfolio_health: Dict[str, Any]) -> html.Div:
     queue = html.Div([
         html.Div([
             html.Div([
-                html.Span("PM Health Review Queue ", style={"fontSize": "18px", "fontWeight": 800, "color": COLORS["ink"]}),
-                html.Span("(highest attention first)", style={"fontSize": "13px", "color": COLORS["muted"]}),
+                html.Span("PM Health Review Queue", style={"fontSize": "18px", "fontWeight": 800, "color": COLORS["ink"]}),
             ]),
-            html.Div(f"{len(rows)} items", style={"fontSize": "13px", "color": COLORS["muted"]}),
-        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "baseline", "marginBottom": "4px"}),
-        html.Div("Select a row to open PM preview. Click the asset or PM name to open Work Strategy Studio.",
-                 style={**MUTED, "marginBottom": "12px"}),
+            html.Div([
+                html.Span(f"{len(rows)} items", style={"fontSize": "13px", "color": COLORS["muted"]}),
+                html.Button("Download", id="cc-queue-download-btn", n_clicks=0, className="cc-download-btn"),
+                dcc.Download(id="cc-queue-download"),
+            ], style={"display": "flex", "alignItems": "center", "gap": "12px"}),
+        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "12px"}),
         _queue_table(rows),
     ], style={"flex": "1", "minWidth": "0", "background": "white", "border": f"1px solid {COLORS['line']}",
               "borderRadius": "12px", "padding": "16px 18px"})
 
     return html.Div([
-        html.Div("Command Center", style={"fontSize": "18px", "fontWeight": 800, "color": COLORS["ink"], "marginBottom": "2px"}),
-        html.Div("Fleet PM triage - highest-attention PMs first.", style={**MUTED, "marginBottom": "14px"}),
         html.Div([
             _priorities_rail(rows),
             queue,
@@ -224,3 +228,22 @@ def render_pm_preview(result: Dict[str, Any], actions: bool = True, narrative: O
     if actions:
         wrap.update({"flex": "0 0 340px", "width": "340px", "boxShadow": "0 2px 12px rgba(11,36,49,0.08)"})
     return html.Div(children, style=wrap)
+
+
+def render_pm_error(eid: str | None = None) -> html.Div:
+    """Inline error state for the slide-over when the PM summarization call fails.
+
+    Same card footprint as the preview slide-over so the layout does not shift; carries a Retry
+    action (id=cc-retry-btn) that re-runs the summarization for the last-attempted PM."""
+    wrap = {"background": "white", "border": f"1px solid {COLORS['line']}", "borderRadius": "12px",
+            "padding": "16px 18px", "flex": "0 0 340px", "width": "340px",
+            "boxShadow": "0 2px 12px rgba(11,36,49,0.08)"}
+    return html.Div([
+        html.Div(f"{eid or 'PM'}  Preview", style={"fontSize": "15px", "fontWeight": 800, "color": COLORS["ink"], "marginBottom": "10px"}),
+        html.Div("MAX could not summarize this PM.",
+                 style={"fontSize": "14px", "fontWeight": 700, "color": STATUS_COLORS.get("BLOCKED", COLORS["ink"]), "marginBottom": "4px"}),
+        html.Div("The analysis request did not complete. Please try again.", style={**MUTED, "marginBottom": "14px"}),
+        html.Button("Retry", id="cc-retry-btn", n_clicks=0,
+                    style={"width": "100%", "padding": "11px", "border": "none", "borderRadius": "10px",
+                           "background": COLORS["oxy"], "color": "white", "fontWeight": 700, "cursor": "pointer"}),
+    ], style=wrap)

@@ -18,7 +18,7 @@ from flask import request
 
 from max_agent.orchestrator import MaxAgent
 from max_agent.intent import resolve_asset_from_text
-from max_agent.ui.artifact_catalog import render_artifact_history, render_trace_history
+from max_agent.ui.artifact_catalog import preview_empty, render_artifact_history, render_trace_history
 from max_agent.ui.artifacts import _audit_trail, render_context_bar
 from max_agent.ui.studio import render_studio
 from max_agent.ui.chat import render_chat, render_process, render_transcript, render_user_bubble
@@ -27,6 +27,7 @@ from max_agent.ui.command_center import (
     _PRIORITY,
     priority_match,
     priority_tile_style,
+    render_pm_error,
     render_pm_preview,
 )
 from max_agent.ui.layout import build_layout, nav_button_style
@@ -181,7 +182,7 @@ def poll_status(_n, session_id):
 def on_context(equipment_id, time_window, review_type, chat_question, chat_artifacts, session_id, history, messages):
     actor = _current_actor()
     sid = session_id or "ui"
-    empty = html.Div()
+    empty = preview_empty()  # centered icon+text shown in the Preview tab when there is no PM preview
     # Narrate (run MAX) only when the ASK triggered this render; browsing stays fast and shows no answer.
     triggered = {t["prop_id"].split(".")[0] for t in (ctx.triggered or [])}
     question = None
@@ -410,24 +411,80 @@ app.clientside_callback(
 
 # --- Command Center interactions ----------------------------------------------
 @app.callback(
-    Output("cc-preview", "children"),
-    Output("asset-dropdown", "value", allow_duplicate=True),
-    Output("workspace", "data", allow_duplicate=True),
-    Input("pmhealth-table", "active_cell"),
+    Output("cc-queue-download", "data"),
+    Input("cc-queue-download-btn", "n_clicks"),
+    State("pmhealth-table", "derived_virtual_data"),  # rows as currently filtered/sorted in the table
     State("pmhealth-table", "data"),
     prevent_initial_call=True,
 )
+def download_queue(n_clicks, filtered_rows, all_rows):
+    """Export the PM Health queue to CSV - the rows as currently shown (native column filters + sort)."""
+    if not n_clicks:
+        return no_update
+    from max_agent.ui.artifact_catalog import _detail_csv
+    from max_agent.ui.command_center import QUEUE_EXPORT_COLUMNS, QUEUE_EXPORT_LABELS
+    rows = filtered_rows if filtered_rows is not None else (all_rows or [])
+    csv_text = _detail_csv(QUEUE_EXPORT_COLUMNS, QUEUE_EXPORT_LABELS, rows)
+    return dcc.send_string(csv_text, "pm_health_review_queue.csv")
+
+
+def _summarize_pm(eid):
+    """Run the AI summarization for a PM and render its preview slide-over."""
+    result = agent.run(eid)
+    return render_pm_preview(result, narrative=agent.preview_narrative(result, concise=True))
+
+
+# The busy overlay is shown while either the row-click or the retry callback is in flight, then reset
+# when the call resolves (on success AND on error, so it never sticks). The overlay covers the viewport
+# and intercepts every click, so a second row-click cannot start a duplicate request. Retry lives in its
+# own callback because its Input (cc-retry-btn) only exists after an error renders it - mixing a
+# not-yet-present Input into the row-click callback (which fires on the always-present active_cell)
+# trips a Dash "nonexistent object" error.
+_BUSY_RUNNING = (Output("busy-overlay", "style", allow_duplicate=True), {"display": "flex"}, {"display": "none"})
+
+
+@app.callback(
+    Output("cc-preview", "children"),
+    Output("asset-dropdown", "value", allow_duplicate=True),
+    Output("workspace", "data", allow_duplicate=True),
+    Output("cc-last-eid", "data"),
+    Input("pmhealth-table", "active_cell"),
+    State("pmhealth-table", "data"),
+    running=[_BUSY_RUNNING],
+    prevent_initial_call=True,
+)
 def on_queue_click(active_cell, data):
+    """Row body -> PM preview slide-over (runs the AI summarization). Asset/PM link -> Studio.
+    A failed summarization renders an inline error+Retry panel (the overlay never sticks)."""
     if not active_cell or not data:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
     row = active_cell.get("row")
     if row is None or row >= len(data):
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
     eid = data[row].get("equipment_id")
     if active_cell.get("column_id") in ("equipment_id", "pm_id"):
-        return no_update, eid, "studio"  # asset / PM name -> Work Strategy Studio directly
-    result = agent.run(eid)  # row body -> PM preview slide-over with MAX's concise assessment paragraph
-    return render_pm_preview(result, narrative=agent.preview_narrative(result, concise=True)), eid, no_update
+        return no_update, eid, "studio", no_update  # asset / PM name -> Work Strategy Studio directly
+    try:
+        return _summarize_pm(eid), eid, no_update, eid
+    except Exception:
+        return render_pm_error(eid), eid, no_update, eid
+
+
+@app.callback(
+    Output("cc-preview", "children", allow_duplicate=True),
+    Input("cc-retry-btn", "n_clicks"),
+    State("cc-last-eid", "data"),
+    running=[_BUSY_RUNNING],
+    prevent_initial_call=True,
+)
+def on_pm_retry(n_clicks, last_eid):
+    """Retry the summarization for the last-attempted PM (the error panel's Retry button)."""
+    if not n_clicks or not last_eid:
+        return no_update
+    try:
+        return _summarize_pm(last_eid)
+    except Exception:
+        return render_pm_error(last_eid)
 
 
 @app.callback(

@@ -361,14 +361,42 @@ def render_artifacts(result: Dict[str, Any], selected: Optional[List[str]] = Non
     return html.Div(cards, style={"display": "flex", "flexDirection": "column", "gap": "12px"})
 
 
+def empty_state(icon_src: str, text: str) -> html.Div:
+    """Shared right-panel empty state: one large centered icon + a short contextual line below it.
+    The container is a flex column that vertically centers its content over the panel height; when a
+    tab has content instead, the normal top-aligned card flow renders (this element is not used)."""
+    return html.Div([
+        html.Img(src=icon_src, style={"width": "52px", "height": "52px", "marginBottom": "16px"}),
+        html.Div(text, style={"fontSize": "13px", "color": COLORS["muted"], "maxWidth": "300px",
+                              "textAlign": "center", "lineHeight": "1.5"}),
+    ], style={"display": "flex", "flexDirection": "column", "alignItems": "center", "justifyContent": "center",
+              "textAlign": "center", "minHeight": "calc(100vh - 210px)", "padding": "24px", "boxSizing": "border-box"})
+
+
+def artifacts_empty() -> html.Div:
+    return empty_state("/assets/icons/artifacts.svg",
+                       "Ask MAX a question - each answer's artifacts appear here, newest first.")
+
+
+def preview_empty() -> html.Div:
+    return empty_state("/assets/icons/preview.svg",
+                       "Ask about a specific PM - its decision preview appears here.")
+
+
+def trace_empty() -> html.Div:
+    return empty_state("/assets/icons/trace.svg",
+                       "Ask MAX a question - the governance trace for each answer appears here.")
+
+
 def _history_cards(history: List[Dict[str, Any]], collapsed: Optional[List[int]],
-                   hdr_type: str, body_fn, empty_msg: str) -> html.Div:
+                   hdr_type: str, body_fn, empty_el: html.Div) -> html.Div:
     """Shared Finance-style history stack: one collapsible card per answered question, newest first,
     labelled by its question + timestamp (the newest tagged 'newest'). `hdr_type` names the header's
     pattern id (so Artifacts and Governance-Trace stacks toggle independently); `body_fn(entry, is_newest)`
-    renders that card's body. Collapsed cards render header-only."""
+    renders that card's body. Collapsed cards render header-only. `empty_el` is the centered empty
+    state shown when there is no history yet."""
     if not history:
-        return html.Div(empty_msg, style={**MUTED, "padding": "8px 2px"})
+        return empty_el
     collapsed_set = set(collapsed or [])
     newest_n = max(e.get("n", 0) for e in history)
     cards = []
@@ -461,10 +489,7 @@ def render_artifact_history(history: List[Dict[str, Any]], collapsed: Optional[L
         if e.get("kind") == "free_flow":
             return render_free_flow_card(e)
         return render_artifacts(e.get("result") or {}, e.get("selected"), live=newest)
-    return _history_cards(
-        history, collapsed, "arti-hdr", body,
-        "Ask MAX a question - each answer's artifacts stack here, newest first. Prior answers collapse "
-        "under their question; click to reopen.")
+    return _history_cards(history, collapsed, "arti-hdr", body, artifacts_empty())
 
 
 def render_trace_history(history: List[Dict[str, Any]], collapsed: Optional[List[int]] = None) -> html.Div:
@@ -474,7 +499,4 @@ def render_trace_history(history: List[Dict[str, Any]], collapsed: Optional[List
         if e.get("kind") == "free_flow":
             return render_free_flow_trace_note(e)
         return render_governance_trace(e.get("result") or {})
-    return _history_cards(
-        history, collapsed, "trace-hdr", body,
-        "The full governance trace of each answer - the model's tool plan, every deterministic tool that "
-        "ran, and the scoped SQL - stacks here, newest first.")
+    return _history_cards(history, collapsed, "trace-hdr", body, trace_empty())
